@@ -77,7 +77,7 @@ class MenuNavPlugin(Star):
     def _collect(self) -> str:
         root = self._plugin_store_path()
         if not root.is_dir():
-            return "📋 菜单导航\n（未找到插件目录）"
+            return "🧭 菜单导航\n（未找到插件目录）"
         parts: List[str] = []
         for child in sorted(root.iterdir()):
             if not child.is_dir() or child.name.startswith("."):
@@ -108,7 +108,7 @@ class MenuNavPlugin(Star):
             parts.append(f"【{display_name}】\n{text}")
         if not parts:
             return "📋 菜单导航\n（暂未发现提供菜单的插件）"
-        return "📋 菜单导航\n" + "\n\n".join(parts)
+        return "🧭 菜单导航\n" + "\n\n".join(parts)
 
     def _menu_text(self) -> str:
         now = time.time()
