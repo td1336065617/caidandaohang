@@ -1,5 +1,11 @@
 # 更新日志
 
+## [1.0.3] - 2026-08-16
+
+### 修复
+- `metadata.yaml` 补充 `repo` 仓库地址，修复 WebUI“更新插件”报
+  “does not specify a repository URL or download URL”的问题。
+
 ## [1.0.2] - 2026-08-16
 
 ### 变更
