@@ -84,10 +84,11 @@ class MenuNavPlugin(Star):
                 continue
             if child.name == PLUGIN_NAME:
                 continue
+            meta = self._read_metadata(child)
             text = self._read_menu(child)
             display_name = child.name
+            repo = str(meta.get("repo") or "").strip() if meta else ""
             if text is None:
-                meta = self._read_metadata(child)
                 if meta:
                     display_name = str(
                         meta.get("display_name") or meta.get("name") or child.name
@@ -98,11 +99,12 @@ class MenuNavPlugin(Star):
                 if text is None:
                     continue
             else:
-                meta = self._read_metadata(child)
                 if meta:
                     display_name = str(
                         meta.get("display_name") or meta.get("name") or display_name
                     )
+            if repo and repo not in text:
+                text = f"{text}\n🔗 开源：{repo}"
             parts.append(f"【{display_name}】\n{text}")
         if not parts:
             return "📋 菜单导航\n（暂未发现提供菜单的插件）"
