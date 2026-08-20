@@ -5,7 +5,7 @@ desc: |
   发送“菜单”即可查看已安装插件的聚合菜单。
   约定：插件根目录放置 menu.md（或 metadata.yaml 声明 menu 字段），
   内容会自动出现在“菜单”导航里；无需修改各插件代码。
-version: 1.0.4
+version: 1.0.5
 author: td1336065617
 repo: https://github.com/td1336065617/caidandaohang/tree/master
 astrbot_version: ">=4.13.0,<5"
