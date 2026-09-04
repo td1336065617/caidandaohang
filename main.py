@@ -32,7 +32,7 @@ MENU_COMMANDS = ("菜单", "菜单导航")
 # 纯文本兜底时的单条消息最大长度
 MAX_CHUNK = 1500
 # 缓存格式变化时，强制重新生成 HTML 和图片
-CACHE_FORMAT_VERSION = 3
+CACHE_FORMAT_VERSION = 4
 # 图片尺寸：使用固定宽度，按内容估算高度，避免 QQ 文本长度限制
 RENDER_WIDTH = 1200
 MIN_RENDER_HEIGHT = 760
@@ -303,7 +303,7 @@ class MenuNavPlugin(Star):
     @staticmethod
     def _scope_label(line: str) -> str:
         if "管理员" in line:
-            return "🔑 仅管理员"
+            return "🌙 仅管理员"
         return "👥 所有人可用"
 
     @classmethod
@@ -373,7 +373,12 @@ class MenuNavPlugin(Star):
         """扫描当前插件菜单，返回指纹、纯文本摘要和 HTML 所需结构。"""
         root = self._plugin_store_path()
         if not root.is_dir():
-            text = "🧭 菜单导航\n（未找到插件目录）"
+            text = (
+                "🌸 ELYSIAN PINK PEARL · 菜单导航\n"
+                "╭──────────────╮\n"
+                "（未找到插件目录）\n"
+                "╰──────────────╯"
+            )
             return self._signature([]), text, []
 
         source: List[Dict[str, str]] = []
@@ -415,13 +420,23 @@ class MenuNavPlugin(Star):
 
         signature = self._signature(source, enabled)
         if not plugins:
-            return signature, "📋 菜单导航\n（暂未发现提供菜单的插件）", []
+            return (
+                signature,
+                "🌸 ELYSIAN PINK PEARL · 菜单导航\n"
+                "╭──────────────╮\n"
+                "（暂未发现提供菜单的插件）\n"
+                "╰──────────────╯",
+                [],
+            )
         text = self._summary_text(plugins)
         return signature, text, plugins
 
     @staticmethod
     def _summary_text(plugins: List[Dict[str, object]]) -> str:
-        parts = ["🧭 菜单导航"]
+        parts = [
+            "🌸 ELYSIAN PINK PEARL · 菜单导航",
+            "╭──────────────╮",
+        ]
         for plugin in plugins:
             parts.append(f"【{plugin['display_name']}】")
             items = plugin["items"]
@@ -443,6 +458,7 @@ class MenuNavPlugin(Star):
             if plugin.get("repo"):
                 parts.append(f"🔗 开源：{plugin['repo']}")
             parts.append("")
+        parts.append("╰──────────────╯")
         return "\n".join(parts).rstrip()
 
     # ------------------------------------------------------------------
@@ -514,28 +530,46 @@ class MenuNavPlugin(Star):
   <title>菜单导航</title>
   <style>
     * {{ box-sizing: border-box; }}
-    html, body {{ margin: 0; padding: 0; background: #edf2f7; }}
-    body {{ color: #1f2937; font-family: "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; }}
-    .page {{ width: {RENDER_WIDTH}px; margin: 0 auto; padding: 42px 56px 52px; }}
-    .header {{ margin-bottom: 26px; }}
-    .title {{ color: #0f766e; font-size: 36px; font-weight: 800; letter-spacing: 1px; }}
-    .subtitle {{ color: #64748b; font-size: 17px; margin-top: 8px; }}
-    .plugin {{ margin: 0 0 20px; padding: 23px 28px 24px; background: #fff; border: 1px solid #dbe4ee; border-radius: 18px; box-shadow: 0 7px 20px rgba(15, 23, 42, .06); }}
-    h2 {{ margin: 0 0 16px; color: #0f172a; font-size: 25px; }}
-    .scope {{ margin: 13px 0 7px; color: #475569; font-size: 16px; font-weight: 700; }}
+    html, body {{ margin: 0; padding: 0; background: #21162d; }}
+    body {{ color: #4c315b; font-family: "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; }}
+    .page {{ width: {RENDER_WIDTH}px; margin: 0 auto; padding: 46px 56px 56px; position: relative; overflow: hidden;
+      background:
+        radial-gradient(circle at 94% 8%, rgba(255,177,218,.28), transparent 24%),
+        radial-gradient(circle at 6% 88%, rgba(145,223,247,.22), transparent 26%),
+        linear-gradient(135deg,#24142f 0%,#382044 52%,#213847 100%); }}
+    .page:before {{ content:""; position:absolute; inset:0; opacity:.2; pointer-events:none;
+      background-image:linear-gradient(120deg,transparent 0 46%,rgba(255,255,255,.18) 47%,transparent 48%),
+        linear-gradient(60deg,transparent 0 72%,rgba(255,192,226,.12) 73%,transparent 74%);
+      background-size:180px 180px,220px 220px; mask-image:linear-gradient(to bottom,black,transparent 90%); }}
+    .page:after {{ content:"✿"; position:absolute; right:78px; top:84px; color:rgba(255,225,241,.62);
+      font-size:54px; transform:rotate(14deg); pointer-events:none; }}
+    .header {{ position:relative; z-index:1; margin-bottom: 28px; }}
+    .eyebrow {{ color:#ffd2e9; font-size:14px; font-weight:800; letter-spacing:3px; text-shadow:0 0 16px rgba(255,170,216,.45); }}
+    .title {{ color: #fff7fb; font-size: 38px; font-weight: 900; letter-spacing: 1px; margin-top:6px;
+      text-shadow:0 3px 20px rgba(255,137,195,.45); }}
+    .subtitle {{ color: #f2d8e8; font-size: 17px; margin-top: 7px; }}
+    .plugin {{ position:relative; overflow:hidden; margin: 0 0 20px; padding: 23px 28px 24px;
+      background:linear-gradient(145deg,rgba(255,252,255,.98),rgba(255,230,244,.93));
+      border: 1px solid rgba(255,211,235,.92); border-radius: 18px;
+      box-shadow: 0 16px 34px rgba(20,8,35,.28), inset 0 0 26px rgba(255,255,255,.65); }}
+    .plugin:before {{ content:""; position:absolute; left:0; top:0; bottom:0; width:5px;
+      background:linear-gradient(#df6c9e,#b4eaf1); box-shadow:0 0 18px rgba(223,108,158,.7); }}
+    h2 {{ margin: 0 0 16px; color: #51315d; font-size: 25px; font-weight:900; }}
+    .scope {{ margin: 13px 0 7px; color: #8d5f82; font-size: 16px; font-weight: 800; }}
     .item {{ display: flex; gap: 14px; align-items: baseline; padding: 5px 0; font-size: 19px; line-height: 1.5; }}
-    .command {{ color: #0f766e; font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }}
-    .description {{ color: #475569; overflow-wrap: anywhere; }}
-    .repo {{ margin-top: 15px; color: #64748b; font-size: 14px; overflow-wrap: anywhere; }}
-    .repo span {{ color: #2563eb; }}
-    .empty {{ color: #94a3b8; font-size: 17px; }}
-    .global {{ padding: 30px; background: #fff; border-radius: 16px; }}
+    .command {{ color: #c44786; font-weight: 800; white-space: pre-wrap; overflow-wrap: anywhere; }}
+    .description {{ color: #705276; overflow-wrap: anywhere; }}
+    .repo {{ margin-top: 15px; color: #7a6a86; font-size: 14px; overflow-wrap: anywhere; }}
+    .repo span {{ color: #6c93a8; }}
+    .empty {{ color: #a17a95; font-size: 17px; }}
+    .global {{ padding: 30px; background:rgba(255,252,255,.96); border-radius: 16px; }}
   </style>
 </head>
 <body>
   <main class="page">
     <header class="header">
-      <div class="title">🧭 菜单导航</div>
+      <div class="eyebrow">ELYSIAN // PINK PEARL MENU</div>
+      <div class="title">🌸 菜单导航</div>
       <div class="subtitle">已收录各插件可用指令 · 发送“菜单”查看</div>
     </header>
     {body}
@@ -733,27 +767,34 @@ class MenuNavPlugin(Star):
 
         inner_width = RENDER_WIDTH - 56 * 2 - 28 * 2
         cards = []
-        y = 42 + line_height(title_font) + line_height(subtitle_font) + 32
+        y = (
+            42
+            + line_height(repo_font)
+            + 6
+            + line_height(title_font)
+            + line_height(subtitle_font)
+            + 32
+        )
         for plugin in plugins:
-            rows = [("title", str(plugin["display_name"]), plugin_font, "#0f172a")]
+            rows = [("title", str(plugin["display_name"]), plugin_font, "#51315d")]
             items = plugin["items"]
             if items:
                 last_scope = None
                 for item in items:
                     scope = item.get("scope") or ""
                     if scope and scope != last_scope:
-                        rows.append(("scope", scope, scope_font, "#475569"))
+                        rows.append(("scope", scope, scope_font, "#8d5f82"))
                         last_scope = scope
                     item_text = f"• {item['command']}"
                     if item.get("description"):
                         item_text += f"  ─  {item['description']}"
-                    rows.append(("item", item_text, item_font, "#334155"))
+                    rows.append(("item", item_text, item_font, "#705276"))
             elif plugin.get("fallback"):
-                rows.append(("empty", str(plugin["fallback"]), item_font, "#94a3b8"))
+                rows.append(("empty", str(plugin["fallback"]), item_font, "#a17a95"))
             else:
-                rows.append(("empty", "未提供可识别的菜单指令", item_font, "#94a3b8"))
+                rows.append(("empty", "未提供可识别的菜单指令", item_font, "#a17a95"))
             if plugin.get("repo"):
-                rows.append(("repo", f"开源：{plugin['repo']}", repo_font, "#2563eb"))
+                rows.append(("repo", f"开源：{plugin['repo']}", repo_font, "#6c93a8"))
 
             card_top = y
             row_y = card_top + 23
@@ -776,21 +817,38 @@ class MenuNavPlugin(Star):
             y = card_bottom + 20
 
         image_height = max(MIN_RENDER_HEIGHT, min(MAX_RENDER_HEIGHT, y + 32))
-        image = PILImage.new("RGB", (RENDER_WIDTH, image_height), "#edf2f7")
+        image = PILImage.new("RGB", (RENDER_WIDTH, image_height), "#2a193b")
         draw = ImageDraw.Draw(image)
-        draw.text((56, 42), "菜单导航", font=title_font, fill="#0f766e")
+        draw.ellipse(
+            (RENDER_WIDTH - 250, -76, RENDER_WIDTH + 24, 180),
+            outline="#f3a9cb",
+            width=2,
+        )
+        draw.ellipse(
+            (RENDER_WIDTH - 226, -52, RENDER_WIDTH - 8, 158),
+            outline="#b6e7f0",
+            width=2,
+        )
         draw.text(
-            (56, 42 + line_height(title_font)),
+            (56, 42),
+            "ELYSIAN // PINK PEARL MENU",
+            font=repo_font,
+            fill="#ffd5e8",
+        )
+        title_y = 42 + line_height(repo_font) + 6
+        draw.text((56, title_y), "🌸 菜单导航", font=title_font, fill="#fff7fb")
+        draw.text(
+            (56, title_y + line_height(title_font)),
             "已收录各插件可用指令 · 发送“菜单”查看",
             font=subtitle_font,
-            fill="#64748b",
+            fill="#f1d7e7",
         )
         for card_top, card_bottom, rendered_rows in cards:
             draw.rounded_rectangle(
                 (56, card_top, RENDER_WIDTH - 56, card_bottom),
                 radius=18,
-                fill="#ffffff",
-                outline="#dbe4ee",
+                fill="#fff5fb",
+                outline="#efc5dc",
                 width=1,
             )
             for x, row_y, value, font, color in rendered_rows:
