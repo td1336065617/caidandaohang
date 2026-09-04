@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>菜单导航</title>
+<script src="/api/plugin/page/bridge-sdk.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  .card { border: 1px solid rgba(128,128,128,.25); border-radius: 10px; padding: 16px 20px; margin-bottom: 18px; background: rgba(128,128,128,.06); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button { padding: 8px 18px; border: 0; border-radius: 8px; background: #3b82f6; color: #fff; cursor: pointer; font-size: 14px; }
+  button:hover { opacity: .9; }
+  #result { display: none; margin-bottom: 18px; padding: 10px 12px; border-radius: 8px; background: rgba(34,197,94,.12); color: #16a34a; white-space: pre-wrap; font-size: 14px; }
+  #result.error { background: rgba(239,68,68,.12); color: #dc2626; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(128,128,128,.2); }
+  th { font-weight: 600; }
+  .muted { color: #888; font-size: 13px; }
+  .plugin-name { font-weight: 600; }
+  .plugin-dir { color: #888; font-size: 12px; margin-left: 6px; }
+  input[type=checkbox] { width: 16px; height: 16px; }
+</style>
+</head>
+<body>
+<h1>菜单导航后台</h1>
+
+<div id="result"></div>
+
+<div class="card">
+  <h2>菜单整合范围</h2>
+  <div class="row" style="margin-bottom:10px">
+    <label>
+      <input type="checkbox" id="includeAllInput">
+      整合全部插件
+    </label>
+  </div>
+  <div class="muted" style="margin-bottom:12px">
+    默认整合所有已安装插件；开启后以后新增的插件也会自动纳入。
+    关闭后只整合下方勾选的插件。菜单导航插件自身不会被整合。
+  </div>
+  <table>
+    <thead><tr><th style="width:70px">整合</th><th>插件</th><th>菜单状态</th></tr></thead>
+    <tbody id="pluginBody"></tbody>
+  </table>
+  <div class="row" style="margin-top:14px">
+    <button id="btnSave">保存并立即生效</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  const A = window.AstrBotPluginPage;
+  const result = document.getElementById('result');
+  const pluginBody = document.getElementById('pluginBody');
+  const includeAllInput = document.getElementById('includeAllInput');
+  let plugins = [];
+  let settings = { include_all: true, enabled_plugins: [] };
+
+  function show(text, isError) {
+    result.style.display = 'block';
+    result.textContent = text;
+    result.className = isError ? 'error' : '';
+  }
+
+  function renderPlugins() {
+    pluginBody.innerHTML = '';
+    if (!plugins.length) {
+      pluginBody.innerHTML = '<tr><td colspan="3" class="muted">暂无可配置插件</td></tr>';
+      return;
+    }
+    for (const plugin of plugins) {
+      const tr = document.createElement('tr');
+      const selectTd = document.createElement('td');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'plugin-check';
+      checkbox.dataset.directory = plugin.directory;
+      checkbox.checked = settings.include_all || settings.enabled_plugins.includes(plugin.directory);
+      checkbox.disabled = !!settings.include_all;
+      selectTd.appendChild(checkbox);
+
+      const nameTd = document.createElement('td');
+      const name = document.createElement('span');
+      name.className = 'plugin-name';
+      name.textContent = plugin.display_name || plugin.directory;
+      const directory = document.createElement('span');
+      directory.className = 'plugin-dir';
+      directory.textContent = '(' + plugin.directory + ')';
+      nameTd.append(name, directory);
+      if (plugin.description) {
+        const description = document.createElement('div');
+        description.className = 'muted';
+        description.textContent = plugin.description;
+        nameTd.appendChild(description);
+      }
+
+      const statusTd = document.createElement('td');
+      statusTd.className = 'muted';
+      statusTd.textContent = plugin.has_menu ? '已识别菜单指令' : '无可识别菜单，将显示简述';
+
+      tr.append(selectTd, nameTd, statusTd);
+      pluginBody.appendChild(tr);
+    }
+  }
+
+  includeAllInput.onchange = () => {
+    settings.include_all = includeAllInput.checked;
+    renderPlugins();
+  };
+
+  async function loadConfig() {
+    try {
+      const response = await A.apiGet('config');
+      settings = (response && response.settings) || settings;
+      settings.include_all = !!settings.include_all;
+      settings.enabled_plugins = Array.isArray(settings.enabled_plugins)
+        ? settings.enabled_plugins.slice()
+        : [];
+      plugins = (response && Array.isArray(response.plugins) ? response.plugins : [])
+        .map(plugin => Object.assign({}, plugin));
+      includeAllInput.checked = settings.include_all;
+      renderPlugins();
+    } catch (e) {
+      show('加载配置失败：' + (e && e.message ? e.message : e), true);
+    }
+  }
+
+  document.getElementById('btnSave').onclick = async () => {
+    const enabled = [];
+    document.querySelectorAll('.plugin-check').forEach((checkbox) => {
+      if (checkbox.checked) enabled.push(checkbox.dataset.directory);
+    });
+    const nextSettings = {
+      include_all: includeAllInput.checked,
+      enabled_plugins: enabled
+    };
+    try {
+      const response = await A.apiPost('config', { settings: nextSettings });
+      settings = (response && response.settings) || nextSettings;
+      settings.include_all = !!settings.include_all;
+      settings.enabled_plugins = Array.isArray(settings.enabled_plugins)
+        ? settings.enabled_plugins.slice()
+        : [];
+      includeAllInput.checked = settings.include_all;
+      renderPlugins();
+      show('菜单导航配置已保存并立即生效');
+    } catch (e) {
+      show('保存失败：' + (e && e.message ? e.message : e), true);
+    }
+  };
+
+  A.ready().then(loadConfig);
+})();
+</script>
+</body>
+</html>

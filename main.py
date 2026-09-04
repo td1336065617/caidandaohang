@@ -23,6 +23,7 @@ import yaml
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+from astrbot.api.web import error_response, json_response, request
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
 
 PLUGIN_NAME = "menu_navigation"
@@ -31,11 +32,12 @@ MENU_COMMANDS = ("菜单", "菜单导航")
 # 纯文本兜底时的单条消息最大长度
 MAX_CHUNK = 1500
 # 缓存格式变化时，强制重新生成 HTML 和图片
-CACHE_FORMAT_VERSION = 2
+CACHE_FORMAT_VERSION = 3
 # 图片尺寸：使用固定宽度，按内容估算高度，避免 QQ 文本长度限制
 RENDER_WIDTH = 1200
 MIN_RENDER_HEIGHT = 760
 MAX_RENDER_HEIGHT = 12000
+SETTINGS_KEY = "settings"
 
 _BULLET_RE = re.compile(r"^\s*(?:[-*+•●▪◦]\s+)")
 _SEPARATOR_RE = re.compile(r"\s+(?:[─—–-]{1,3})\s+|\s*[：:]\s*")
@@ -51,8 +53,26 @@ class MenuNavPlugin(Star):
         self._cache_signature: Optional[str] = None
         self._cache_text: Optional[str] = None
         self._cache_image: Optional[Path] = None
+        # None 表示整合全部插件；集合表示仅整合指定目录。
+        self._enabled_plugins: Optional[set[str]] = None
+        try:
+            self.context.register_web_api(
+                f"/{PLUGIN_NAME}/config",
+                self._web_config_get,
+                ["GET"],
+                "获取菜单导航配置",
+            )
+            self.context.register_web_api(
+                f"/{PLUGIN_NAME}/config",
+                self._web_config_set,
+                ["POST"],
+                "保存菜单导航配置",
+            )
+        except Exception as exc:
+            logger.error("菜单导航注册 Web API 失败：%s", exc)
 
     async def initialize(self) -> None:
+        await self._load_settings()
         # 不在启动阶段扫描插件或渲染图片，避免启动变慢；首次触发菜单时再按需处理。
         logger.info("菜单导航插件 已启动（菜单图片按需生成）")
 
@@ -69,6 +89,145 @@ class MenuNavPlugin(Star):
 
     def _cache_state_path(self) -> Path:
         return self._cache_dir() / "cache.json"
+
+    def _set_enabled_plugins(self, enabled: Optional[set[str]]) -> None:
+        """更新内存筛选条件；只有筛选条件变化时才使图片缓存失效。"""
+        normalized = None if enabled is None else set(enabled)
+        with self._cache_lock:
+            if self._enabled_plugins == normalized:
+                return
+            self._enabled_plugins = normalized
+            self._cache_signature = None
+            self._cache_text = None
+            self._cache_image = None
+
+    async def _load_settings(self) -> None:
+        """从 AstrBot KV 加载筛选设置；没有配置时默认整合全部插件。"""
+        try:
+            raw = await self.get_kv_data(SETTINGS_KEY, {}) or {}
+        except Exception as exc:
+            logger.warning("读取菜单导航配置失败，暂时整合全部插件：%s", exc)
+            self._set_enabled_plugins(None)
+            return
+        if not isinstance(raw, dict):
+            self._set_enabled_plugins(None)
+            return
+        include_all = raw.get("include_all", True)
+        if not isinstance(include_all, bool):
+            include_all = True
+        selected = raw.get("enabled_plugins", [])
+        if not isinstance(selected, list):
+            selected = []
+        normalized = {
+            str(item).strip()
+            for item in selected
+            if str(item).strip()
+        }
+        self._set_enabled_plugins(None if include_all else normalized)
+
+    def _plugin_catalog(self) -> List[Dict[str, object]]:
+        """扫描可配置的插件目录，返回后台页面所需的简要信息。"""
+        root = self._plugin_store_path()
+        if not root.is_dir():
+            return []
+        catalog: List[Dict[str, object]] = []
+        for child in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if child.name == PLUGIN_NAME:
+                continue
+            metadata, _ = self._read_metadata(child)
+            menu_text, _ = self._read_menu(child, metadata)
+            items = self._extract_menu_items(menu_text) if menu_text else []
+            catalog.append(
+                {
+                    "directory": child.name,
+                    "display_name": self._display_name(child, metadata),
+                    "has_menu": bool(items),
+                    "description": self._short_description(metadata),
+                }
+            )
+        return catalog
+
+    async def _web_config_get(self):
+        await self._load_settings()
+        catalog = self._plugin_catalog()
+        with self._cache_lock:
+            enabled = None if self._enabled_plugins is None else set(self._enabled_plugins)
+        selected = [
+            item["directory"]
+            for item in catalog
+            if enabled is None or item["directory"] in enabled
+        ]
+        return json_response(
+            {
+                "status": "success",
+                "data": {
+                    "settings": {
+                        "include_all": enabled is None,
+                        "enabled_plugins": selected,
+                    },
+                    "plugins": catalog,
+                },
+            }
+        )
+
+    async def _web_config_set(self):
+        payload = await request.json(default=None)
+        if not isinstance(payload, dict):
+            return error_response("请求体格式不正确")
+        settings = payload.get("settings", payload)
+        if not isinstance(settings, dict):
+            return error_response("settings 必须是对象")
+
+        try:
+            current = await self.get_kv_data(SETTINGS_KEY, {}) or {}
+        except Exception:
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+        include_all = settings.get("include_all", current.get("include_all", True))
+        if not isinstance(include_all, bool):
+            return error_response("include_all 必须是布尔值")
+        selected = settings.get("enabled_plugins", current.get("enabled_plugins", []))
+        if not isinstance(selected, list):
+            return error_response("enabled_plugins 必须是列表")
+
+        known = {
+            str(item["directory"])
+            for item in self._plugin_catalog()
+            if item.get("directory")
+        }
+        normalized: List[str] = []
+        for item in selected:
+            directory = str(item).strip()
+            if directory in known and directory not in normalized:
+                normalized.append(directory)
+        try:
+            await self.put_kv_data(
+                SETTINGS_KEY,
+                {
+                    "include_all": include_all,
+                    "enabled_plugins": normalized,
+                },
+            )
+        except Exception as exc:
+            logger.error("保存菜单导航配置失败：%s", exc, exc_info=True)
+            return error_response(f"保存失败：{exc}")
+
+        self._set_enabled_plugins(None if include_all else set(normalized))
+        return json_response(
+            {
+                "status": "success",
+                "data": {
+                    "message": "菜单导航配置已保存并生效",
+                    "settings": {
+                        "include_all": include_all,
+                        "enabled_plugins": normalized,
+                    },
+                },
+            }
+        )
 
     def _read_metadata(self, plugin_dir: Path) -> Tuple[dict, str]:
         """读取 metadata，并返回原始内容用于菜单版本指纹。"""
@@ -193,9 +352,17 @@ class MenuNavPlugin(Star):
         return items
 
     @staticmethod
-    def _signature(source: List[Dict[str, str]]) -> str:
+    def _signature(
+        source: List[Dict[str, str]], enabled: Optional[set[str]] = None
+    ) -> str:
         payload = json.dumps(
-            {"format": CACHE_FORMAT_VERSION, "plugins": source},
+            {
+                "format": CACHE_FORMAT_VERSION,
+                "enabled_plugins": (
+                    None if enabled is None else sorted(enabled)
+                ),
+                "plugins": source,
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -211,10 +378,13 @@ class MenuNavPlugin(Star):
 
         source: List[Dict[str, str]] = []
         plugins: List[Dict[str, object]] = []
+        enabled = getattr(self, "_enabled_plugins", None)
         for child in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
             if not child.is_dir() or child.name.startswith("."):
                 continue
             if child.name == PLUGIN_NAME:
+                continue
+            if enabled is not None and child.name not in enabled:
                 continue
 
             metadata, metadata_raw = self._read_metadata(child)
@@ -243,7 +413,7 @@ class MenuNavPlugin(Star):
                 }
             )
 
-        signature = self._signature(source)
+        signature = self._signature(source, enabled)
         if not plugins:
             return signature, "📋 菜单导航\n（暂未发现提供菜单的插件）", []
         text = self._summary_text(plugins)
@@ -762,6 +932,8 @@ class MenuNavPlugin(Star):
         if message_str not in MENU_COMMANDS:
             return
 
+        # 后台配置保存后会立即更新内存；这里再读一次可兼容插件重载后的配置。
+        await self._load_settings()
         # 图片渲染是阻塞操作，放到线程中，不阻塞 AstrBot 的事件循环。
         image_path, text = await asyncio.to_thread(self._ensure_menu_image)
         if image_path is not None and image_path.is_file():
