@@ -27,3 +27,5 @@ Chromium/Chrome、Firefox、`wkhtmltoimage`，没有浏览器时使用 Pillow；
 中文字体会优先选择 `Noto Sans CJK SC` 的简体中文字体面；如需指定字体文件，
 可设置 `MENU_NAVIGATION_FONT`，使用 TTC 字体时可通过
 `MENU_NAVIGATION_FONT_INDEX` 指定字体面索引（默认自动选择简体中文面）。
+聚合菜单使用较宽的字间距、行距和卡片留白，中文条目不会紧贴在一起；
+排版调整会通过缓存版本自动生效。

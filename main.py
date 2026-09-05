@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -32,7 +33,7 @@ MENU_COMMANDS = ("菜单", "菜单导航")
 # 纯文本兜底时的单条消息最大长度
 MAX_CHUNK = 1500
 # 缓存格式变化时，强制重新生成 HTML 和图片
-CACHE_FORMAT_VERSION = 5
+CACHE_FORMAT_VERSION = 6
 # 图片尺寸：使用固定宽度，按内容估算高度，避免 QQ 文本长度限制
 RENDER_WIDTH = 1200
 MIN_RENDER_HEIGHT = 760
@@ -51,6 +52,41 @@ MENU_FONT_FAMILY = (
     '"WenQuanYi Zen Hei", "Microsoft YaHei", "Noto Color Emoji", '
     "sans-serif"
 )
+
+
+def _text_units(value: str) -> List[str]:
+    """按近似字素切分，避免把 emoji 的变体选择符拆开。"""
+    units: List[str] = []
+    for char in str(value):
+        if units and (
+            unicodedata.combining(char)
+            or "\ufe00" <= char <= "\ufe0f"
+            or char == "\u200d"
+            or units[-1].endswith("\u200d")
+        ):
+            units[-1] += char
+        else:
+            units.append(char)
+    return units
+
+
+def _tracked_width(draw, value: str, font, tracking: float) -> float:
+    units = _text_units(value)
+    width = sum(
+        draw.textbbox((0, 0), unit, font=font)[2]
+        - draw.textbbox((0, 0), unit, font=font)[0]
+        for unit in units
+    )
+    return width + max(0, len(units) - 1) * tracking
+
+
+def _draw_tracked(draw, xy, value: str, font, fill, tracking: float) -> None:
+    cursor = float(xy[0])
+    y = xy[1]
+    for unit in _text_units(value):
+        draw.text((round(cursor), y), unit, font=font, fill=fill)
+        box = draw.textbbox((0, 0), unit, font=font)
+        cursor += box[2] - box[0] + tracking
 
 
 class MenuNavPlugin(Star):
@@ -485,7 +521,7 @@ class MenuNavPlugin(Star):
                 lines += 2
             if plugin.get("repo"):
                 lines += 2
-        return max(MIN_RENDER_HEIGHT, min(MAX_RENDER_HEIGHT, 105 + lines * 38))
+        return max(MIN_RENDER_HEIGHT, min(MAX_RENDER_HEIGHT, 120 + lines * 46))
 
     @staticmethod
     def _html_for_snapshot(plugins: List[Dict[str, object]]) -> str:
@@ -552,23 +588,23 @@ class MenuNavPlugin(Star):
       background-size:180px 180px,220px 220px; mask-image:linear-gradient(to bottom,black,transparent 90%); }}
     .page:after {{ content:"✿"; position:absolute; right:78px; top:84px; color:rgba(255,225,241,.62);
       font-size:54px; transform:rotate(14deg); pointer-events:none; }}
-    .header {{ position:relative; z-index:1; margin-bottom: 28px; }}
-    .eyebrow {{ color:#ffd2e9; font-size:14px; font-weight:800; letter-spacing:3px; text-shadow:0 0 16px rgba(255,170,216,.45); }}
-    .title {{ color: #fff7fb; font-size: 38px; font-weight: 900; letter-spacing: 1px; margin-top:6px;
+    .header {{ position:relative; z-index:1; margin-bottom: 34px; }}
+    .eyebrow {{ color:#ffd2e9; font-size:14px; font-weight:800; line-height:1.5; letter-spacing:3.6px; text-shadow:0 0 16px rgba(255,170,216,.45); }}
+    .title {{ color: #fff7fb; font-size: 38px; font-weight: 900; line-height:1.4; letter-spacing: 1.6px; margin-top:8px;
       text-shadow:0 3px 20px rgba(255,137,195,.45); }}
-    .subtitle {{ color: #f2d8e8; font-size: 17px; margin-top: 7px; }}
-    .plugin {{ position:relative; overflow:hidden; margin: 0 0 20px; padding: 23px 28px 24px;
+    .subtitle {{ color: #f2d8e8; font-size: 17px; line-height:1.65; letter-spacing:.3px; margin-top: 10px; }}
+    .plugin {{ position:relative; overflow:hidden; margin: 0 0 25px; padding: 27px 32px 30px;
       background:linear-gradient(145deg,rgba(255,252,255,.98),rgba(255,230,244,.93));
       border: 1px solid rgba(255,211,235,.92); border-radius: 18px;
       box-shadow: 0 16px 34px rgba(20,8,35,.28), inset 0 0 26px rgba(255,255,255,.65); }}
     .plugin:before {{ content:""; position:absolute; left:0; top:0; bottom:0; width:5px;
       background:linear-gradient(#df6c9e,#b4eaf1); box-shadow:0 0 18px rgba(223,108,158,.7); }}
-    h2 {{ margin: 0 0 16px; color: #51315d; font-size: 25px; font-weight:900; }}
-    .scope {{ margin: 13px 0 7px; color: #8d5f82; font-size: 16px; font-weight: 800; }}
-    .item {{ display: flex; gap: 14px; align-items: baseline; padding: 5px 0; font-size: 19px; line-height: 1.5; }}
-    .command {{ color: #c44786; font-weight: 800; white-space: pre-wrap; overflow-wrap: anywhere; }}
-    .description {{ color: #705276; overflow-wrap: anywhere; }}
-    .repo {{ margin-top: 15px; color: #7a6a86; font-size: 14px; overflow-wrap: anywhere; }}
+    h2 {{ margin: 0 0 20px; color: #51315d; font-size: 25px; line-height:1.4; font-weight:900; letter-spacing:.5px; }}
+    .scope {{ margin: 16px 0 10px; color: #8d5f82; font-size: 16px; line-height:1.5; font-weight: 800; letter-spacing:.45px; }}
+    .item {{ display: flex; gap: 18px; align-items: baseline; padding: 8px 0; font-size: 19px; line-height: 1.72; letter-spacing:.3px; }}
+    .command {{ color: #c44786; font-weight: 800; letter-spacing:.45px; white-space: pre-wrap; overflow-wrap: anywhere; }}
+    .description {{ color: #705276; letter-spacing:.3px; overflow-wrap: anywhere; }}
+    .repo {{ margin-top: 18px; color: #7a6a86; font-size: 14px; line-height:1.6; letter-spacing:.25px; overflow-wrap: anywhere; }}
     .repo span {{ color: #6c93a8; }}
     .empty {{ color: #a17a95; font-size: 17px; }}
     .global {{ padding: 30px; background:rgba(255,252,255,.96); border-radius: 16px; }}
@@ -820,15 +856,20 @@ class MenuNavPlugin(Star):
             box = measure_draw.textbbox((0, 0), "菜单导航Ag", font=font)
             return max(22, box[3] - box[1] + 8)
 
-        def wrap(value: str, font, max_width: int) -> List[str]:
+        def wrap(
+            value: str,
+            font,
+            max_width: int,
+            tracking: float,
+        ) -> List[str]:
             result: List[str] = []
             for paragraph in (value.splitlines() or [""]):
                 current = ""
                 for char in paragraph:
                     candidate = current + char
-                    if current and measure_draw.textbbox(
-                        (0, 0), candidate, font=font
-                    )[2] > max_width:
+                    if current and _tracked_width(
+                        measure_draw, candidate, font, tracking
+                    ) > max_width:
                         result.append(current)
                         current = char
                     else:
@@ -841,10 +882,11 @@ class MenuNavPlugin(Star):
         y = (
             42
             + line_height(repo_font)
-            + 6
+            + 9
             + line_height(title_font)
+            + 8
             + line_height(subtitle_font)
-            + 32
+            + 40
         )
         for plugin in plugins:
             rows = [("title", str(plugin["display_name"]), plugin_font, "#51315d")]
@@ -877,13 +919,22 @@ class MenuNavPlugin(Star):
                     row_y += 7
                 elif row_kind == "repo":
                     row_y += 9
-                lines = wrap(value, font, inner_width)
+                tracking = (
+                    0.5
+                    if row_kind in {"title", "scope"}
+                    else 0.25
+                    if row_kind == "repo"
+                    else 0.35
+                )
+                lines = wrap(value, font, inner_width, tracking)
                 row_height = line_height(font)
                 for line in lines:
-                    rendered_rows.append((56 + 28, row_y, line, font, color))
+                    rendered_rows.append(
+                        (56 + 32, row_y, line, font, color, tracking)
+                    )
                     row_y += row_height
-                row_y += 3
-            card_bottom = row_y + 20
+                row_y += 7
+            card_bottom = row_y + 25
             cards.append((card_top, card_bottom, rendered_rows))
             y = card_bottom + 20
 
@@ -900,19 +951,30 @@ class MenuNavPlugin(Star):
             outline="#b6e7f0",
             width=2,
         )
-        draw.text(
+        _draw_tracked(
+            draw,
             (56, 42),
             "ELYSIAN // PINK PEARL MENU",
-            font=repo_font,
-            fill="#ffd5e8",
+            repo_font,
+            "#ffd5e8",
+            0.65,
         )
-        title_y = 42 + line_height(repo_font) + 6
-        draw.text((56, title_y), "🌸 菜单导航", font=title_font, fill="#fff7fb")
-        draw.text(
-            (56, title_y + line_height(title_font)),
+        title_y = 42 + line_height(repo_font) + 9
+        _draw_tracked(
+            draw,
+            (56, title_y),
+            "🌸 菜单导航",
+            title_font,
+            "#fff7fb",
+            1.0,
+        )
+        _draw_tracked(
+            draw,
+            (56, title_y + line_height(title_font) + 8),
             "已收录各插件可用指令 · 发送“菜单”查看",
-            font=subtitle_font,
-            fill="#f1d7e7",
+            subtitle_font,
+            "#f1d7e7",
+            0.35,
         )
         for card_top, card_bottom, rendered_rows in cards:
             draw.rounded_rectangle(
@@ -922,8 +984,15 @@ class MenuNavPlugin(Star):
                 outline="#efc5dc",
                 width=1,
             )
-            for x, row_y, value, font, color in rendered_rows:
-                draw.text((x, row_y), value, font=font, fill=color)
+            for x, row_y, value, font, color, tracking in rendered_rows:
+                _draw_tracked(
+                    draw,
+                    (x, row_y),
+                    value,
+                    font,
+                    color,
+                    tracking,
+                )
         try:
             image.save(image_path, format="PNG")
         except OSError:
