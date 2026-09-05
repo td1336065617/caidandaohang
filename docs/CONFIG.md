@@ -23,3 +23,7 @@ AstrBot 管理面板 → 插件管理 → **菜单导航**。
 Chromium/Chrome、Firefox、`wkhtmltoimage`，没有浏览器时使用 Pillow；都不可用
 才会回退为纯文本分片发送。也可用环境变量 `MENU_NAVIGATION_RENDERER` 指定
 渲染器路径，或指定为 `pillow`。
+
+中文字体会优先选择 `Noto Sans CJK SC` 的简体中文字体面；如需指定字体文件，
+可设置 `MENU_NAVIGATION_FONT`，使用 TTC 字体时可通过
+`MENU_NAVIGATION_FONT_INDEX` 指定字体面索引（默认自动选择简体中文面）。

@@ -40,7 +40,9 @@ menu: |
 - 转图不依赖 Google Chrome：会自动尝试 Chromium/Chrome、Firefox、
   `wkhtmltoimage`，都不可用时使用 Pillow 绘制 PNG；若 Pillow 也不可用，
   最后退回纯文本分片发送。也可通过 `MENU_NAVIGATION_RENDERER` 指定渲染器路径，
-  或指定为 `pillow`。
+  或指定为 `pillow`。中文字体默认使用 `Noto Sans CJK SC` 的简体中文字体面；
+  如需覆盖，可设置 `MENU_NAVIGATION_FONT` 和（TTC 字体时）
+  `MENU_NAVIGATION_FONT_INDEX`。
 - 群聊无需 @机器人，私聊也可使用。
 
 ## 部署
