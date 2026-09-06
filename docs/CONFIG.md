@@ -27,5 +27,10 @@ Chromium/Chrome、Firefox、`wkhtmltoimage`，没有浏览器时使用 Pillow；
 中文字体会优先选择 `Noto Sans CJK SC` 的简体中文字体面；如需指定字体文件，
 可设置 `MENU_NAVIGATION_FONT`，使用 TTC 字体时可通过
 `MENU_NAVIGATION_FONT_INDEX` 指定字体面索引（默认自动选择简体中文面）。
+Emoji 字体由插件自带 `assets/fonts/NotoColorEmoji.ttf`，不依赖服务器是否安装
+Emoji 字体。HTML 渲染会通过本地 `@font-face` 加载它；Pillow 回退会以高分辨率
+绘制后缩放，字体不可用时使用安全符号，避免出现方框字形。如需使用其他字体，
+可设置 `MENU_NAVIGATION_EMOJI_FONT`，使用 TTC 字体时可通过
+`MENU_NAVIGATION_EMOJI_FONT_INDEX` 指定字体面索引。
 聚合菜单使用较宽的字间距、行距和卡片留白，中文条目不会紧贴在一起；
 排版调整会通过缓存版本自动生效。

@@ -33,12 +33,19 @@ MENU_COMMANDS = ("菜单", "菜单导航")
 # 纯文本兜底时的单条消息最大长度
 MAX_CHUNK = 1500
 # 缓存格式变化时，强制重新生成 HTML 和图片
-CACHE_FORMAT_VERSION = 6
+CACHE_FORMAT_VERSION = 7
 # 图片尺寸：使用固定宽度，按内容估算高度，避免 QQ 文本长度限制
 RENDER_WIDTH = 1200
 MIN_RENDER_HEIGHT = 760
 MAX_RENDER_HEIGHT = 12000
 SETTINGS_KEY = "settings"
+EMOJI_FONT_SIZE = 109
+BUNDLED_EMOJI_FONT = (
+    Path(__file__).resolve().parent
+    / "assets"
+    / "fonts"
+    / "NotoColorEmoji.ttf"
+)
 
 _BULLET_RE = re.compile(r"^\s*(?:[-*+•●▪◦]\s+)")
 _SEPARATOR_RE = re.compile(r"\s+(?:[─—–-]{1,3})\s+|\s*[：:]\s*")
@@ -49,8 +56,29 @@ _DIVIDER_RE = re.compile(r"^[\s\-_=─—–━]{3,}$")
 # 日文字库面，菜单中文会出现方框或字形错乱。
 MENU_FONT_FAMILY = (
     '"Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", '
-    '"WenQuanYi Zen Hei", "Microsoft YaHei", "Noto Color Emoji", '
+    '"WenQuanYi Zen Hei", "Microsoft YaHei", sans-serif'
+)
+EMOJI_FONT_FAMILY = (
+    '"Menu Bundled Emoji", "Noto Color Emoji", '
     "sans-serif"
+)
+
+EMOJI_FALLBACKS = {
+    "👥": "◆",
+    "🔑": "◆",
+    "🌙": "◆",
+    "⚙️": "⚙",
+    "🌸": "✦",
+    "🎴": "▣",
+    "📢": "◆",
+    "🔗": "↗",
+}
+
+EMOJI_RANGES = (
+    (0x1F000, 0x1FAFF),
+    (0x2300, 0x23FF),
+    (0x2600, 0x27BF),
+    (0x2B00, 0x2BFF),
 )
 
 
@@ -61,6 +89,7 @@ def _text_units(value: str) -> List[str]:
         if units and (
             unicodedata.combining(char)
             or "\ufe00" <= char <= "\ufe0f"
+            or char == "\u20e3"
             or char == "\u200d"
             or units[-1].endswith("\u200d")
         ):
@@ -68,6 +97,32 @@ def _text_units(value: str) -> List[str]:
         else:
             units.append(char)
     return units
+
+
+def _is_emoji_unit(value: str) -> bool:
+    """判断一个 grapheme 单元是否需要交给 Emoji 字体渲染。"""
+    text = str(value or "")
+    if not text:
+        return False
+    if "\ufe0f" in text or "\u20e3" in text or "\u200d" in text:
+        return True
+    return any(
+        start <= ord(char) <= end
+        for char in text
+        for start, end in EMOJI_RANGES
+    )
+
+
+def _html_text(value: object) -> str:
+    """转义菜单文字，并把 Emoji 单独交给 Emoji 字体。"""
+    pieces = []
+    for unit in _text_units(str(value or "")):
+        escaped = html.escape(unit, quote=True)
+        if _is_emoji_unit(unit):
+            pieces.append(f'<span class="emoji">{escaped}</span>')
+        else:
+            pieces.append(escaped)
+    return "".join(pieces)
 
 
 def _tracked_width(draw, value: str, font, tracking: float) -> float:
@@ -526,6 +581,22 @@ class MenuNavPlugin(Star):
     @staticmethod
     def _html_for_snapshot(plugins: List[Dict[str, object]]) -> str:
         cards: List[str] = []
+        bundled_emoji_face = ""
+        if BUNDLED_EMOJI_FONT.is_file():
+            try:
+                font_url = BUNDLED_EMOJI_FONT.as_uri()
+            except ValueError:
+                font_url = ""
+            if font_url:
+                bundled_emoji_face = f"""
+    @font-face {{
+      font-family: "Menu Bundled Emoji";
+      src: url("{font_url}") format("truetype");
+      font-weight: normal;
+      font-style: normal;
+      font-display: block;
+    }}
+"""
         for plugin in plugins:
             rows: List[str] = []
             items = plugin["items"]
@@ -534,16 +605,14 @@ class MenuNavPlugin(Star):
                 for item in items:
                     scope = item.get("scope") or ""
                     if scope and scope != last_scope:
-                        rows.append(
-                            f'<div class="scope">{html.escape(scope)}</div>'
-                        )
+                        rows.append(f'<div class="scope">{_html_text(scope)}</div>')
                         last_scope = scope
                     description = item.get("description") or ""
                     rows.append(
                         '<div class="item">'
-                        f'<span class="command">{html.escape(item["command"])}</span>'
+                        f'<span class="command">{_html_text(item["command"])}</span>'
                         + (
-                            f'<span class="description">{html.escape(description)}</span>'
+                            f'<span class="description">{_html_text(description)}</span>'
                             if description
                             else ""
                         )
@@ -551,18 +620,18 @@ class MenuNavPlugin(Star):
                     )
             elif plugin.get("fallback"):
                 rows.append(
-                    f'<div class="empty">{html.escape(str(plugin["fallback"]))}</div>'
+                    f'<div class="empty">{_html_text(plugin["fallback"])}</div>'
                 )
             else:
                 rows.append('<div class="empty">未提供可识别的菜单指令</div>')
             if plugin.get("repo"):
                 repo = html.escape(str(plugin["repo"]), quote=True)
                 rows.append(
-                    f'<div class="repo">🔗 开源：<span>{repo}</span></div>'
+                    f'<div class="repo">{_html_text("🔗 开源：")}<span>{repo}</span></div>'
                 )
             cards.append(
                 '<section class="plugin">'
-                f'<h2>{html.escape(str(plugin["display_name"]))}</h2>'
+                f'<h2>{_html_text(plugin["display_name"])}</h2>'
                 f'{"".join(rows)}'
                 "</section>"
             )
@@ -576,7 +645,9 @@ class MenuNavPlugin(Star):
   <style>
     * {{ box-sizing: border-box; }}
     html, body {{ margin: 0; padding: 0; background: #21162d; }}
+    {bundled_emoji_face}
     body {{ color: #4c315b; font-family: {MENU_FONT_FAMILY}; font-variant-east-asian: simplified; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }}
+    .emoji {{ font-family: {EMOJI_FONT_FAMILY}; font-variant-emoji: emoji; font-weight: normal; letter-spacing: 0; }}
     .page {{ width: {RENDER_WIDTH}px; margin: 0 auto; padding: 46px 56px 56px; position: relative; overflow: hidden;
       background:
         radial-gradient(circle at 94% 8%, rgba(255,177,218,.28), transparent 24%),
@@ -749,6 +820,100 @@ class MenuNavPlugin(Star):
         return path
 
     @staticmethod
+    def _emoji_font_index_from_env(default: int = 0) -> int:
+        try:
+            return max(
+                0,
+                int(
+                    os.environ.get(
+                        "MENU_NAVIGATION_EMOJI_FONT_INDEX", default
+                    )
+                ),
+            )
+        except (TypeError, ValueError):
+            return max(0, default)
+
+    @staticmethod
+    def _find_emoji_font_spec() -> Tuple[Optional[str], int]:
+        """优先使用插件内置 Emoji 字体，再尝试系统字体。"""
+        configured = os.environ.get("MENU_NAVIGATION_EMOJI_FONT")
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if configured_path.is_file():
+                return (
+                    str(configured_path),
+                    MenuNavPlugin._emoji_font_index_from_env(),
+                )
+
+        if BUNDLED_EMOJI_FONT.is_file():
+            return str(BUNDLED_EMOJI_FONT), 0
+
+        fc_match = shutil.which("fc-match")
+        if fc_match:
+            try:
+                result = subprocess.run(
+                    [
+                        fc_match,
+                        "-f",
+                        "%{file}|%{index}",
+                        "Noto Color Emoji",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                path_text, _, index_text = (
+                    result.stdout.strip().partition("|")
+                )
+                if result.returncode == 0 and Path(path_text).is_file():
+                    try:
+                        index = int(index_text or "0")
+                    except ValueError:
+                        index = 0
+                    return path_text, max(0, index)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+        for path in (
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+        ):
+            if Path(path).is_file():
+                return path, 0
+        return None, 0
+
+    @staticmethod
+    def _find_emoji_font_path() -> Optional[str]:
+        """返回可用于 Pillow 的 Emoji 字体路径。"""
+        path, _ = MenuNavPlugin._find_emoji_font_spec()
+        return path
+
+    @staticmethod
+    def _load_emoji_font(image_font_module):
+        """加载固定像素面的彩色 Emoji 字体。"""
+        path, index = MenuNavPlugin._find_emoji_font_spec()
+        if not path:
+            return None
+        # Noto Color Emoji 在不同 Pillow 版本中通常只能加载固定的
+        # CBDT/CBLC 像素面；从首选尺寸开始逐个尝试，兼容其他字体。
+        for size in (
+            EMOJI_FONT_SIZE,
+            128,
+            96,
+            72,
+            64,
+            48,
+            32,
+        ):
+            try:
+                return image_font_module.truetype(path, size, index=index)
+            except (OSError, ValueError):
+                continue
+        return None
+
+    @staticmethod
     def _run_external_renderer(
         kind: str,
         executable: str,
@@ -790,6 +955,7 @@ class MenuNavPlugin(Star):
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--force-device-scale-factor=1",
+                "--allow-file-access-from-files",
                 f"--window-size={RENDER_WIDTH},{height}",
                 f"--screenshot={image_path}",
                 html_path.as_uri(),
@@ -849,12 +1015,154 @@ class MenuNavPlugin(Star):
         except (OSError, ValueError):
             return False
 
+        emoji_font = cls._load_emoji_font(ImageFont)
         measure_image = PILImage.new("RGB", (1, 1), "white")
         measure_draw = ImageDraw.Draw(measure_image)
+        emoji_cache = {}
 
         def line_height(font) -> int:
             box = measure_draw.textbbox((0, 0), "菜单导航Ag", font=font)
             return max(22, box[3] - box[1] + 8)
+
+        def emoji_target_height(font) -> int:
+            font_size = getattr(font, "size", 0)
+            if isinstance(font_size, int) and font_size > 0:
+                return font_size
+            box = measure_draw.textbbox((0, 0), "Ag", font=font)
+            return max(1, box[3] - box[1])
+
+        def render_emoji(unit: str, target_height: int):
+            """在高分辨率透明画布绘制 Emoji，再缩放到目标字号。"""
+            cache_key = (unit, target_height)
+            if cache_key in emoji_cache:
+                return emoji_cache[cache_key]
+            if emoji_font is None:
+                emoji_cache[cache_key] = None
+                return None
+            try:
+                bbox = emoji_font.getbbox(unit)
+                advance = max(1, int(round(emoji_font.getlength(unit))))
+                bbox_width = max(1, bbox[2] - bbox[0], advance)
+                bbox_height = max(1, bbox[3] - bbox[1])
+                padding = 12
+                tile = PILImage.new(
+                    "RGBA",
+                    (bbox_width + padding * 2, bbox_height + padding * 2),
+                    (0, 0, 0, 0),
+                )
+                tile_draw = ImageDraw.Draw(tile)
+                draw_position = (
+                    padding - bbox[0],
+                    padding - bbox[1],
+                )
+                try:
+                    tile_draw.text(
+                        draw_position,
+                        unit,
+                        font=emoji_font,
+                        embedded_color=True,
+                    )
+                except TypeError:
+                    # 兼容旧 Pillow：至少保留字形，不因参数不识别而退回方框。
+                    tile_draw.text(
+                        draw_position,
+                        unit,
+                        font=emoji_font,
+                    )
+                alpha_box = tile.getchannel("A").getbbox()
+                if not alpha_box:
+                    emoji_cache[cache_key] = None
+                    return None
+                cropped = tile.crop(alpha_box)
+                target_height = max(1, int(target_height))
+                target_width = max(
+                    1,
+                    int(round(cropped.width * target_height / cropped.height)),
+                )
+                resampling = getattr(PILImage, "Resampling", PILImage)
+                resized = cropped.resize(
+                    (target_width, target_height),
+                    resampling.LANCZOS,
+                )
+                # 保留 Emoji 的字符进位，窄字形（如 🎴）在进位盒中居中，
+                # 避免后面的中文贴得过近。
+                scaled_advance = max(
+                    target_width,
+                    int(
+                        round(
+                            advance
+                            * target_height
+                            / max(1, bbox_height)
+                        )
+                    ),
+                )
+                result = (resized, scaled_advance)
+            except (OSError, ValueError, TypeError):
+                result = None
+            emoji_cache[cache_key] = result
+            return result
+
+        def fallback_unit(unit: str) -> str:
+            return EMOJI_FALLBACKS.get(unit, "◆") if _is_emoji_unit(unit) else unit
+
+        def mixed_width(
+            value: str,
+            font,
+            tracking: float,
+        ) -> float:
+            """按实际中文/Emoji 绘制方式测量一行文字。"""
+            widths = []
+            target_height = emoji_target_height(font)
+            for unit in _text_units(value):
+                if _is_emoji_unit(unit):
+                    rendered = render_emoji(unit, target_height)
+                    if rendered is not None:
+                        widths.append(rendered[1])
+                        continue
+                    unit = fallback_unit(unit)
+                box = measure_draw.textbbox((0, 0), unit, font=font)
+                widths.append(max(0, box[2] - box[0]))
+            return sum(widths) + max(0, len(widths) - 1) * tracking
+
+        def draw_mixed(
+            canvas,
+            canvas_draw,
+            xy,
+            value: str,
+            font,
+            fill,
+            tracking: float,
+        ) -> None:
+            """在同一行中混合绘制普通文字和彩色 Emoji。"""
+            cursor = float(xy[0])
+            y = xy[1]
+            target_height = emoji_target_height(font)
+            regular_box = measure_draw.textbbox((0, 0), "Ag", font=font)
+            emoji_y = y + regular_box[1]
+            for unit in _text_units(value):
+                if _is_emoji_unit(unit):
+                    rendered = render_emoji(unit, target_height)
+                    if rendered is not None:
+                        emoji_image, advance = rendered
+                        paste_x = round(
+                            cursor + max(0, (advance - emoji_image.width) / 2)
+                        )
+                        canvas.paste(
+                            emoji_image,
+                            (paste_x, round(emoji_y)),
+                            emoji_image,
+                        )
+                        cursor += advance + tracking
+                        continue
+                    unit = fallback_unit(unit)
+                canvas_draw.text(
+                    (round(cursor), y),
+                    unit,
+                    font=font,
+                    fill=fill,
+                )
+                box = measure_draw.textbbox((0, 0), unit, font=font)
+                cursor += box[2] - box[0] + tracking
 
         def wrap(
             value: str,
@@ -865,13 +1173,11 @@ class MenuNavPlugin(Star):
             result: List[str] = []
             for paragraph in (value.splitlines() or [""]):
                 current = ""
-                for char in paragraph:
-                    candidate = current + char
-                    if current and _tracked_width(
-                        measure_draw, candidate, font, tracking
-                    ) > max_width:
+                for unit in _text_units(paragraph):
+                    candidate = current + unit
+                    if current and mixed_width(candidate, font, tracking) > max_width:
                         result.append(current)
-                        current = char
+                        current = unit
                     else:
                         current = candidate
                 result.append(current or " ")
@@ -985,7 +1291,8 @@ class MenuNavPlugin(Star):
                 width=1,
             )
             for x, row_y, value, font, color, tracking in rendered_rows:
-                _draw_tracked(
+                draw_mixed(
+                    image,
                     draw,
                     (x, row_y),
                     value,

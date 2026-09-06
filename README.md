@@ -43,6 +43,11 @@ menu: |
   或指定为 `pillow`。中文字体默认使用 `Noto Sans CJK SC` 的简体中文字体面；
   如需覆盖，可设置 `MENU_NAVIGATION_FONT` 和（TTC 字体时）
   `MENU_NAVIGATION_FONT_INDEX`。
+- 插件自带 `assets/fonts/NotoColorEmoji.ttf`，菜单标题、分组和指令中的
+  Emoji 会单独使用 Emoji 字体渲染。Pillow 回退会先高分辨率绘制再缩放；
+  即使系统没有 Emoji 字体也可以正常生成，字体加载失败时会使用安全符号
+  兜底。可通过 `MENU_NAVIGATION_EMOJI_FONT` 覆盖内置字体，
+  `MENU_NAVIGATION_EMOJI_FONT_INDEX` 指定字体面索引。
 - 群聊无需 @机器人，私聊也可使用。
 
 ## 部署
