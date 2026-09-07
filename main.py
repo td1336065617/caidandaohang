@@ -33,7 +33,7 @@ MENU_COMMANDS = ("菜单", "菜单导航")
 # 纯文本兜底时的单条消息最大长度
 MAX_CHUNK = 1500
 # 缓存格式变化时，强制重新生成 HTML 和图片
-CACHE_FORMAT_VERSION = 7
+CACHE_FORMAT_VERSION = 8
 # 图片尺寸：使用固定宽度，按内容估算高度，避免 QQ 文本长度限制
 RENDER_WIDTH = 1200
 MIN_RENDER_HEIGHT = 760
@@ -685,7 +685,7 @@ class MenuNavPlugin(Star):
   <main class="page">
     <header class="header">
       <div class="eyebrow">ELYSIAN // PINK PEARL MENU</div>
-      <div class="title">🌸 菜单导航</div>
+      <div class="title">{_html_text("🌸 菜单导航")}</div>
       <div class="subtitle">已收录各插件可用指令 · 发送“菜单”查看</div>
     </header>
     {body}
@@ -1266,7 +1266,8 @@ class MenuNavPlugin(Star):
             0.65,
         )
         title_y = 42 + line_height(repo_font) + 9
-        _draw_tracked(
+        draw_mixed(
+            image,
             draw,
             (56, title_y),
             "🌸 菜单导航",
