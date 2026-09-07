@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -32,6 +33,10 @@ PLUGIN_NAME = "menu_navigation"
 MENU_COMMANDS = ("菜单", "菜单导航")
 # 纯文本兜底时的单条消息最大长度
 MAX_CHUNK = 1500
+# 渲染失败后的冷却窗口：坏渲染环境下不要每次触发都重试几十秒。
+RENDER_FAILURE_COOLDOWN = 300
+# PNG 魔数，用于识别损坏/截断图片。
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 # 缓存格式变化时，强制重新生成 HTML 和图片
 CACHE_FORMAT_VERSION = 8
 # 图片尺寸：使用固定宽度，按内容估算高度，避免 QQ 文本长度限制
@@ -50,6 +55,17 @@ BUNDLED_EMOJI_FONT = (
 _BULLET_RE = re.compile(r"^\s*(?:[-*+•●▪◦]\s+)")
 _SEPARATOR_RE = re.compile(r"\s+(?:[─—–-]{1,3})\s+|\s*[：:]\s*")
 _DIVIDER_RE = re.compile(r"^[\s\-_=─—–━]{3,}$")
+
+
+def _is_valid_png(path: Path) -> bool:
+    """基础 PNG 校验：文件存在且以 PNG 魔数开头，排除损坏/空白图。"""
+    try:
+        if not path.is_file() or path.stat().st_size <= 8:
+            return False
+        with path.open("rb") as handle:
+            return handle.read(8) == PNG_MAGIC
+    except OSError:
+        return False
 
 # HTML 渲染器和 Pillow 回退统一使用简体中文字体。Pillow 读取 TTC
 # 时必须显式指定 SC face（NotoSansCJK 的 index=2），否则默认会加载
@@ -153,6 +169,9 @@ class MenuNavPlugin(Star):
         self._cache_signature: Optional[str] = None
         self._cache_text: Optional[str] = None
         self._cache_image: Optional[Path] = None
+        # 上次渲染失败的签名与时间：冷却窗口内直接回文本，避免反复重试。
+        self._cache_failed_signature: Optional[str] = None
+        self._cache_failed_at: Optional[float] = None
         # None 表示整合全部插件；集合表示仅整合指定目录。
         self._enabled_plugins: Optional[set[str]] = None
         try:
@@ -381,11 +400,12 @@ class MenuNavPlugin(Star):
 
     @staticmethod
     def _display_name(plugin_dir: Path, metadata: dict) -> str:
-        return str(
+        value = str(
             metadata.get("display_name")
             or metadata.get("name")
             or plugin_dir.name
-        ).strip()
+        )
+        return " ".join(value.split())
 
     @staticmethod
     def _short_description(metadata: dict) -> str:
@@ -495,7 +515,7 @@ class MenuNavPlugin(Star):
             metadata, metadata_raw = self._read_metadata(child)
             menu_text, menu_raw = self._read_menu(child, metadata)
             display_name = self._display_name(child, metadata)
-            repo = str(metadata.get("repo") or "").strip()
+            repo = " ".join(str(metadata.get("repo") or "").split())
             items = self._extract_menu_items(menu_text) if menu_text else []
             fallback = self._short_description(metadata)
 
@@ -520,11 +540,16 @@ class MenuNavPlugin(Star):
 
         signature = self._signature(source, enabled)
         if not plugins:
+            empty_text = (
+                "（暂未发现提供菜单的插件）"
+                if not source
+                else "（已启用插件均未提供可识别菜单）"
+            )
             return (
                 signature,
                 "🌸 ELYSIAN PINK PEARL · 菜单导航\n"
                 "╭──────────────╮\n"
-                "（暂未发现提供菜单的插件）\n"
+                f"{empty_text}\n"
                 "╰──────────────╯",
                 [],
             )
@@ -1310,13 +1335,17 @@ class MenuNavPlugin(Star):
     def _render_image(self, plugins: List[Dict[str, object]]) -> Optional[Path]:
         """写入 HTML，并尝试系统可用的 HTML 渲染器转成图片。"""
         cache_dir = self._cache_dir()
-        cache_dir.mkdir(parents=True, exist_ok=True)
         html_path = cache_dir / "menu.html"
         image_path = cache_dir / "menu.png"
         html_tmp = cache_dir / "menu.html.tmp"
         image_tmp = cache_dir / "menu.render.png"
-        html_tmp.write_text(self._html_for_snapshot(plugins), encoding="utf-8")
-        os.replace(html_tmp, html_path)
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            html_tmp.write_text(self._html_for_snapshot(plugins), encoding="utf-8")
+            os.replace(html_tmp, html_path)
+        except OSError as exc:
+            logger.warning("菜单导航写入 HTML 失败，改用纯文本：%s", exc)
+            return None
 
         image_tmp.unlink(missing_ok=True)
         height = self._estimate_render_height(plugins)
@@ -1329,14 +1358,17 @@ class MenuNavPlugin(Star):
                 success = self._run_external_renderer(
                     kind, executable, html_path, image_tmp, height
                 )
-            if success:
+            if success and _is_valid_png(image_tmp):
                 os.replace(image_tmp, image_path)
                 logger.info("菜单导航已使用 %s 将 HTML 转为图片", kind)
                 return image_path
+            image_tmp.unlink(missing_ok=True)
 
         # Pillow 不是外部渲染器候选项，确保没有任何浏览器时也会尝试一次。
         image_tmp.unlink(missing_ok=True)
-        if self._render_with_pillow(plugins, image_tmp):
+        if self._render_with_pillow(plugins, image_tmp) and _is_valid_png(
+            image_tmp
+        ):
             os.replace(image_tmp, image_path)
             logger.info("菜单导航已使用 Pillow 兜底生成图片")
             return image_path
@@ -1358,9 +1390,12 @@ class MenuNavPlugin(Star):
             state.get("format") != CACHE_FORMAT_VERSION
             or state.get("signature") != signature
             or state.get("image") != image_path.name
-            or not image_path.is_file()
-            or image_path.stat().st_size == 0
         ):
+            return None
+        try:
+            if not _is_valid_png(image_path):
+                return None
+        except OSError:
             return None
         return image_path
 
@@ -1382,9 +1417,18 @@ class MenuNavPlugin(Star):
         os.replace(state_tmp, state_path)
 
     def _ensure_menu_image(self) -> Tuple[Optional[Path], str]:
-        """触发时检查菜单版本；无变化复用图片，有变化才重新渲染。"""
+        """触发时检查菜单版本；无变化复用图片，有变化才重新渲染。
+
+        渲染/IO 失败都返回 (None, text)，保证必有纯文本兜底；失败后在
+        RENDER_FAILURE_COOLDOWN 窗口内不再重复尝试同一签名。
+        """
         with self._cache_lock:
-            signature, text, plugins = self._collect_snapshot()
+            try:
+                signature, text, plugins = self._collect_snapshot()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("菜单扫描失败，改用纯文本：%s", exc, exc_info=True)
+                return None, "（菜单生成失败，请稍后重试）"
+
             if (
                 signature == self._cache_signature
                 and self._cache_image is not None
@@ -1399,29 +1443,73 @@ class MenuNavPlugin(Star):
                 self._cache_image = cached_image
                 return cached_image, text
 
-            image_path = self._render_image(plugins)
+            # 空态/无可用插件时不需要渲染图片，直接纯文本。
+            if not plugins:
+                self._cache_signature = signature
+                self._cache_text = text
+                self._cache_image = None
+                return None, text
+
+            # 同一签名刚失败过且仍在冷却期：不再完整重试（可能各 30s 超时）。
+            if (
+                signature == self._cache_failed_signature
+                and self._cache_failed_at is not None
+                and time.monotonic() - self._cache_failed_at
+                < RENDER_FAILURE_COOLDOWN
+            ):
+                return None, text
+
+            try:
+                image_path = self._render_image(plugins)
+            except Exception as exc:  # noqa: BLE001 - 渲染异常不能吞掉文字回复
+                logger.warning("菜单渲染异常，改用纯文本：%s", exc, exc_info=True)
+                image_path = None
             self._cache_signature = signature
             self._cache_text = text
             self._cache_image = image_path
             if image_path is not None:
+                self._cache_failed_at = None
+                self._cache_failed_signature = None
                 try:
                     self._save_cache_state(signature)
                 except OSError as exc:
                     logger.warning("菜单导航缓存状态保存失败：%s", exc)
+            else:
+                self._cache_failed_at = time.monotonic()
+                self._cache_failed_signature = signature
             return image_path, text
 
     @staticmethod
     def _text_chunks(text: str):
+        """纯文本兜底分片：尽量保持行/空格边界与首行缩进。
+
+        后续分片带“接上条”标记；单条总长不超过 MAX_CHUNK。
+        """
+        value = str(text or "")
+        marker = "……（接上条）\n"
+        hard_limit = max(1, MAX_CHUNK - len(marker))
         start = 0
-        while start < len(text):
-            end = min(start + MAX_CHUNK, len(text))
-            if end < len(text):
-                newline = text.rfind("\n", start, end)
-                if newline > start + 100:
-                    end = newline
-            piece = text[start:end].strip()
+        total = len(value)
+        first = True
+        while start < total:
+            end = min(start + hard_limit, total)
+            if end < total:
+                newline = value.rfind("\n", start, end)
+                space = value.rfind(" ", start, end)
+                best = -1
+                if newline > start:
+                    best = newline + 1
+                elif space > start:
+                    best = space + 1
+                if best > start:
+                    end = min(best, start + hard_limit)
+            piece = value[start:end].lstrip("\r\n").rstrip("\r\n")
             if piece:
-                yield piece
+                if first:
+                    yield piece
+                else:
+                    yield marker + piece
+                first = False
             start = end
 
     # ------------------------------------------------------------------
