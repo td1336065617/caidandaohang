@@ -299,6 +299,6 @@ menu_navigation/
 
 ## 许可
 
-本仓库未包含插件本体的 `LICENSE` 文件，插件代码的授权请与作者确认。
+本项目采用 **MIT 许可**，详见 [LICENSE](LICENSE)。
 
 仓库内置的 Emoji 字体 `assets/fonts/NotoColorEmoji.ttf` 来自上游 Noto Emoji 项目，其 `fonts/*` 部分以 SIL Open Font License 1.1 授权（随附的许可文件同时列出了部分资源的 Apache-2.0 授权），完整说明见 [assets/fonts/LICENSE-NotoColorEmoji.txt](assets/fonts/LICENSE-NotoColorEmoji.txt)。
