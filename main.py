@@ -31,6 +31,13 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
 PLUGIN_NAME = "menu_navigation"
 # 触发指令（全匹配，避免误伤聊天内容）
 MENU_COMMANDS = ("菜单", "菜单导航")
+# 插件介绍：介绍各插件的具体功能（含菜单无法表达的"主动触发"功能）。
+# 支持 `插件介绍`、`插件介绍 <插件名关键字>`。
+INTRO_COMMANDS = ("插件介绍", "功能介绍", "插件说明", "插件详情")
+# 插件介绍的内容格式变化时，强制重新生成（与菜单缓存互不影响）
+INTRO_FORMAT_VERSION = 1
+# 单个插件的介绍最多渲染多少行（防止某个插件把卡片撑爆）
+INTRO_MAX_LINES = 60
 # 纯文本兜底时的单条消息最大长度
 MAX_CHUNK = 1500
 # 渲染失败后的冷却窗口：坏渲染环境下不要每次触发都重试几十秒。
@@ -172,6 +179,12 @@ class MenuNavPlugin(Star):
         # 上次渲染失败的签名与时间：冷却窗口内直接回文本，避免反复重试。
         self._cache_failed_signature: Optional[str] = None
         self._cache_failed_at: Optional[float] = None
+        # 插件介绍的独立缓存（与菜单互不影响）
+        self._intro_signature: Optional[str] = None
+        self._intro_text: Optional[str] = None
+        self._intro_image: Optional[Path] = None
+        self._intro_failed_signature: Optional[str] = None
+        self._intro_failed_at: Optional[float] = None
         # None 表示整合全部插件；集合表示仅整合指定目录。
         self._enabled_plugins: Optional[set[str]] = None
         try:
@@ -206,6 +219,10 @@ class MenuNavPlugin(Star):
         # 不额外依赖特定版本的路径 API；插件目录的上级就是 AstrBot/data。
         return self._plugin_store_path().parent / "plugin_data" / PLUGIN_NAME
 
+    def _intro_cache_state_path(self) -> Path:
+        """插件介绍的缓存状态（与菜单分开，避免互相顶掉签名）。"""
+        return self._cache_dir() / "intro_cache.json"
+
     def _cache_state_path(self) -> Path:
         return self._cache_dir() / "cache.json"
 
@@ -219,6 +236,9 @@ class MenuNavPlugin(Star):
             self._cache_signature = None
             self._cache_text = None
             self._cache_image = None
+            self._intro_signature = None
+            self._intro_text = None
+            self._intro_image = None
 
     async def _load_settings(self) -> None:
         """从 AstrBot KV 加载筛选设置；没有配置时默认整合全部插件。"""
@@ -397,6 +417,247 @@ class MenuNavPlugin(Star):
             if text:
                 return text, json.dumps(menu, ensure_ascii=False, sort_keys=True)
         return None, ""
+
+    def _read_intro(self, plugin_dir: Path, metadata: dict) -> Tuple[Optional[str], str]:
+        """读取插件介绍：优先 `intro.md`，其次 metadata 的 `intro` 字段。
+
+        与菜单不同，这里**保留完整富文本**（分组标题 + 条目），因为插件介绍要
+        表达"菜单表达不了的东西"（例如定时推送、后台巡检这类主动触发的功能）。
+        """
+        intro_file = plugin_dir / "intro.md"
+        if intro_file.is_file():
+            try:
+                raw = intro_file.read_text(encoding="utf-8")
+                text = raw.strip()
+                if text:
+                    return text, raw
+            except (OSError, UnicodeError):
+                pass
+
+        intro = metadata.get("intro")
+        if isinstance(intro, str) and intro.strip():
+            return intro.strip(), json.dumps(intro, ensure_ascii=False)
+        if isinstance(intro, list):
+            lines: List[str] = []
+            for item in intro:
+                if isinstance(item, dict):
+                    title = str(item.get("title") or item.get("section") or "").strip()
+                    if title:
+                        lines.append(f"## {title}")
+                    entries = item.get("items") or item.get("features") or []
+                    for entry in entries if isinstance(entries, list) else []:
+                        text = str(entry).strip()
+                        if text:
+                            lines.append(f"- {text}")
+                elif str(item).strip():
+                    lines.append(str(item).strip())
+            payload = "\n".join(lines).strip()
+            if payload:
+                return payload, json.dumps(intro, ensure_ascii=False, sort_keys=True)
+        return None, ""
+
+    @classmethod
+    def _extract_intro_items(cls, text: str) -> List[Dict[str, str]]:
+        """把介绍文本解析成渲染条目：分组标题单独成行，条目按"指令 ─ 说明"切分。"""
+        items: List[Dict[str, str]] = []
+        for raw_line in str(text or "").splitlines():
+            line = " ".join(raw_line.split()).strip()
+            if not line or _DIVIDER_RE.match(line):
+                continue
+            heading = re.match(r"^#{1,6}\s*(.+)$", line)
+            if heading:
+                items.append({"command": f"◆ {heading.group(1).strip()}", "description": ""})
+                continue
+            is_bullet = bool(_BULLET_RE.match(line))
+            body = _BULLET_RE.sub("", line, count=1).strip() if is_bullet else line
+            if not body:
+                continue
+            # 只有项目符号行才按"指令 ─ 说明"切分；普通段落整行保留，
+            # 避免把说明性文字里的冒号当成分隔符切碎。
+            if is_bullet:
+                parts = _SEPARATOR_RE.split(body, maxsplit=1)
+                command = parts[0].strip().strip("`")
+                description = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                command, description = body.strip().strip("`"), ""
+            if not command or len(command) > 120:
+                continue
+            if len(description) > 180:
+                description = description[:180] + "…"
+            items.append({"command": command, "description": description})
+            if len(items) >= INTRO_MAX_LINES:
+                break
+        return items
+
+    def _collect_intro_snapshot(
+        self, filter_text: str = ""
+    ) -> Tuple[str, str, List[Dict[str, object]]]:
+        """扫描各插件介绍，返回（指纹, 纯文本, 渲染结构）。"""
+        root = self._plugin_store_path()
+        keyword = " ".join(str(filter_text or "").split()).casefold()
+        if not root.is_dir():
+            return (
+                self._signature([], getattr(self, "_enabled_plugins", None)),
+                "🌸 ELYSIAN PINK PEARL · 插件介绍\n╭──────────────╮\n（未找到插件目录）\n╰──────────────╯",
+                [],
+            )
+
+        source: List[Dict[str, str]] = []
+        plugins: List[Dict[str, object]] = []
+        enabled = getattr(self, "_enabled_plugins", None)
+        for child in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            # 与菜单不同：插件介绍把本插件自己也算进去（用户同样需要知道菜单怎么用）
+            if enabled is not None and child.name not in enabled:
+                continue
+            metadata, metadata_raw = self._read_metadata(child)
+            intro_text, intro_raw = self._read_intro(child, metadata)
+            display_name = self._display_name(child, metadata)
+            if keyword and keyword not in child.name.casefold() and keyword not in display_name.casefold():
+                continue
+            items = self._extract_intro_items(intro_text) if intro_text else []
+            fallback = " ".join(str(metadata.get("desc") or metadata.get("short_desc") or "").split())
+            repo = " ".join(str(metadata.get("repo") or "").split())
+            source.append(
+                {
+                    "directory": child.name,
+                    "metadata": metadata_raw,
+                    "intro": intro_raw,
+                }
+            )
+            if not items and not fallback:
+                continue
+            plugins.append(
+                {
+                    "display_name": display_name,
+                    "items": items,
+                    "fallback": fallback,
+                    "repo": repo,
+                }
+            )
+
+        signature = hashlib.sha256(
+            json.dumps(
+                {
+                    "format": INTRO_FORMAT_VERSION,
+                    "menu_format": CACHE_FORMAT_VERSION,
+                    "keyword": keyword,
+                    "enabled_plugins": (None if enabled is None else sorted(enabled)),
+                    "plugins": source,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+        if not plugins:
+            empty = (
+                f"（没有匹配「{filter_text}」的插件）"
+                if keyword
+                else "（暂未发现可介绍的插件）"
+            )
+            return (
+                signature,
+                "🌸 ELYSIAN PINK PEARL · 插件介绍\n╭──────────────╮\n"
+                f"{empty}\n╰──────────────╯",
+                [],
+            )
+        return signature, self._summary_intro_text(plugins), plugins
+
+    @staticmethod
+    def _summary_intro_text(plugins: List[Dict[str, object]]) -> str:
+        parts = [
+            "🌸 ELYSIAN PINK PEARL · 插件介绍",
+            "╭──────────────╮",
+        ]
+        for plugin in plugins:
+            parts.append(f"【{plugin['display_name']}】")
+            items = plugin["items"]
+            if items:
+                for item in items:
+                    command = str(item.get("command") or "")
+                    description = str(item.get("description") or "")
+                    if command.startswith("◆ "):
+                        parts.append(command)
+                        continue
+                    parts.append(f"• {command}" + (f" ─ {description}" if description else ""))
+            elif plugin.get("fallback"):
+                parts.append(f"• {plugin['fallback']}")
+            if plugin.get("repo"):
+                parts.append(f"🔗 开源：{plugin['repo']}")
+            parts.append("")
+        parts.append("╰──────────────╯")
+        return "\n".join(parts).rstrip()
+
+    def _ensure_intro_image(
+        self, filter_text: str = ""
+    ) -> Tuple[Optional[Path], str]:
+        """与 `_ensure_menu_image` 同构：命中缓存复用图片，失败给纯文本兜底。"""
+        with self._cache_lock:
+            try:
+                signature, text, plugins = self._collect_intro_snapshot(filter_text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("插件介绍扫描失败，改用纯文本：%s", exc, exc_info=True)
+                return None, "（插件介绍生成失败，请稍后重试）"
+
+            if (
+                signature == self._intro_signature
+                and self._intro_image is not None
+                and self._intro_image.is_file()
+            ):
+                return self._intro_image, self._intro_text or text
+
+            cached_image = self._load_cached_image(
+                signature,
+                image_name="intro.png",
+                state_path=self._intro_cache_state_path(),
+                format_version=INTRO_FORMAT_VERSION,
+            )
+            if cached_image is not None:
+                self._intro_signature = signature
+                self._intro_text = text
+                self._intro_image = cached_image
+                return cached_image, text
+
+            if not plugins:
+                self._intro_signature = signature
+                self._intro_text = text
+                self._intro_image = None
+                return None, text
+
+            if (
+                signature == self._intro_failed_signature
+                and self._intro_failed_at is not None
+                and time.monotonic() - self._intro_failed_at < RENDER_FAILURE_COOLDOWN
+            ):
+                return None, text
+
+            try:
+                image_path = self._render_image(plugins, stem="intro")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("插件介绍渲染异常，改用纯文本：%s", exc, exc_info=True)
+                image_path = None
+            self._intro_signature = signature
+            self._intro_text = text
+            self._intro_image = image_path
+            if image_path is not None:
+                self._intro_failed_at = None
+                self._intro_failed_signature = None
+                try:
+                    self._save_cache_state(
+                        signature,
+                        image_name="intro.png",
+                        state_path=self._intro_cache_state_path(),
+                        format_version=INTRO_FORMAT_VERSION,
+                    )
+                except OSError as exc:
+                    logger.warning("插件介绍缓存状态保存失败：%s", exc)
+            else:
+                self._intro_failed_at = time.monotonic()
+                self._intro_failed_signature = signature
+            return image_path, text
 
     @staticmethod
     def _display_name(plugin_dir: Path, metadata: dict) -> str:
@@ -1332,13 +1593,19 @@ class MenuNavPlugin(Star):
             return False
         return image_path.is_file() and image_path.stat().st_size > 0
 
-    def _render_image(self, plugins: List[Dict[str, object]]) -> Optional[Path]:
-        """写入 HTML，并尝试系统可用的 HTML 渲染器转成图片。"""
+    def _render_image(
+        self, plugins: List[Dict[str, object]], stem: str = "menu"
+    ) -> Optional[Path]:
+        """写入 HTML，并尝试系统可用的 HTML 渲染器转成图片。
+
+        `stem` 区分产物：菜单用 `menu.*`，插件介绍用 `intro.*`，
+        两者互不覆盖（否则会互相顶掉对方的缓存图片）。
+        """
         cache_dir = self._cache_dir()
-        html_path = cache_dir / "menu.html"
-        image_path = cache_dir / "menu.png"
-        html_tmp = cache_dir / "menu.html.tmp"
-        image_tmp = cache_dir / "menu.render.png"
+        html_path = cache_dir / f"{stem}.html"
+        image_path = cache_dir / f"{stem}.png"
+        html_tmp = cache_dir / f"{stem}.html.tmp"
+        image_tmp = cache_dir / f"{stem}.render.png"
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             html_tmp.write_text(self._html_for_snapshot(plugins), encoding="utf-8")
@@ -1376,10 +1643,17 @@ class MenuNavPlugin(Star):
         logger.warning("菜单导航没有可用的 HTML/图片渲染器，改用纯文本发送")
         return None
 
-    def _load_cached_image(self, signature: str) -> Optional[Path]:
-        """读取磁盘缓存，允许重启后复用未过期的菜单图片。"""
-        state_path = self._cache_state_path()
-        image_path = self._cache_dir() / "menu.png"
+    def _load_cached_image(
+        self,
+        signature: str,
+        *,
+        image_name: str = "menu.png",
+        state_path: Optional[Path] = None,
+        format_version: int = CACHE_FORMAT_VERSION,
+    ) -> Optional[Path]:
+        """读取磁盘缓存，允许重启后复用未过期的图片（菜单 / 插件介绍各一份）。"""
+        state_path = state_path or self._cache_state_path()
+        image_path = self._cache_dir() / image_name
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, TypeError):
@@ -1387,7 +1661,7 @@ class MenuNavPlugin(Star):
         if not isinstance(state, dict):
             return None
         if (
-            state.get("format") != CACHE_FORMAT_VERSION
+            state.get("format") != format_version
             or state.get("signature") != signature
             or state.get("image") != image_path.name
         ):
@@ -1399,15 +1673,22 @@ class MenuNavPlugin(Star):
             return None
         return image_path
 
-    def _save_cache_state(self, signature: str) -> None:
-        state_path = self._cache_state_path()
+    def _save_cache_state(
+        self,
+        signature: str,
+        *,
+        image_name: str = "menu.png",
+        state_path: Optional[Path] = None,
+        format_version: int = CACHE_FORMAT_VERSION,
+    ) -> None:
+        state_path = state_path or self._cache_state_path()
         state_tmp = state_path.with_suffix(".json.tmp")
         state_tmp.write_text(
             json.dumps(
                 {
-                    "format": CACHE_FORMAT_VERSION,
+                    "format": format_version,
                     "signature": signature,
-                    "image": "menu.png",
+                    "image": image_name,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -1480,6 +1761,21 @@ class MenuNavPlugin(Star):
             return image_path, text
 
     @staticmethod
+    def _match_intro_command(message_str: str) -> Optional[str]:
+        """识别插件介绍指令，返回关键字（无关键字时返回空串）；不是该指令返回 None。"""
+        text = str(message_str or "").strip()
+        if not text:
+            return None
+        for command in INTRO_COMMANDS:
+            if text == command:
+                return ""
+            if text.startswith(command):
+                rest = text[len(command):].strip(" ：:，,-")
+                if rest:
+                    return rest
+        return None
+
+    @staticmethod
     def _text_chunks(text: str):
         """纯文本兜底分片：尽量保持行/空格边界与首行缩进。
 
@@ -1523,13 +1819,19 @@ class MenuNavPlugin(Star):
         # QQ 官方指令面板可能自动补上“/”；统一去掉一个前缀后再匹配。
         if message_str.startswith("/"):
             message_str = message_str[1:].lstrip()
-        if message_str not in MENU_COMMANDS:
+        intro_arg = self._match_intro_command(message_str)
+        if message_str not in MENU_COMMANDS and intro_arg is None:
             return
 
         # 后台配置保存后会立即更新内存；这里再读一次可兼容插件重载后的配置。
         await self._load_settings()
         # 图片渲染是阻塞操作，放到线程中，不阻塞 AstrBot 的事件循环。
-        image_path, text = await asyncio.to_thread(self._ensure_menu_image)
+        if intro_arg is not None:
+            image_path, text = await asyncio.to_thread(
+                self._ensure_intro_image, intro_arg
+            )
+        else:
+            image_path, text = await asyncio.to_thread(self._ensure_menu_image)
         if image_path is not None and image_path.is_file():
             yield event.image_result(str(image_path))
             return
