@@ -795,6 +795,20 @@ class MenuNavPlugin(Star):
             )
             if not items and not fallback and not repo:
                 continue
+            # 每个插件的分区里都补一条"本插件介绍"指令：菜单里出现的指令必须
+            # 都是"用户发送后会触发功能"的，插件介绍正好属于这一类。
+            if not any("插件介绍" in str(item.get("command") or "") for item in items):
+                last_scope = ""
+                for item in items:
+                    if item.get("scope"):
+                        last_scope = str(item["scope"])
+                items = list(items) + [
+                    {
+                        "command": f"插件介绍 {display_name}",
+                        "description": "查看本插件的完整功能介绍",
+                        "scope": last_scope or "👥 所有人可用",
+                    }
+                ]
             plugins.append(
                 {
                     "display_name": display_name,
@@ -1778,6 +1792,12 @@ class MenuNavPlugin(Star):
                 rest = text[len(command):].strip(" ：:，,-")
                 if rest:
                     return rest
+        # 也支持"插件名 + 插件介绍"的写法（如 `acmer插件介绍`、`群管理插件介绍`），
+        # 这样每个插件的菜单里都能直接列出一条属于自己的介绍指令。
+        if text.endswith("插件介绍") and len(text) > len("插件介绍"):
+            prefix = text[: -len("插件介绍")].strip(" 　:：，,-")
+            if prefix:
+                return prefix
         return None
 
     @staticmethod
