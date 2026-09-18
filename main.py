@@ -798,17 +798,7 @@ class MenuNavPlugin(Star):
             # 每个插件的分区里都补一条"本插件介绍"指令：菜单里出现的指令必须
             # 都是"用户发送后会触发功能"的，插件介绍正好属于这一类。
             if not any("插件介绍" in str(item.get("command") or "") for item in items):
-                last_scope = ""
-                for item in items:
-                    if item.get("scope"):
-                        last_scope = str(item["scope"])
-                items = list(items) + [
-                    {
-                        "command": f"插件介绍 {display_name}",
-                        "description": "查看本插件的完整功能介绍",
-                        "scope": last_scope or "👥 所有人可用",
-                    }
-                ]
+                items = self._with_intro_item(items, display_name)
             plugins.append(
                 {
                     "display_name": display_name,
@@ -835,6 +825,39 @@ class MenuNavPlugin(Star):
             )
         text = self._summary_text(plugins)
         return signature, text, plugins
+
+    @staticmethod
+    def _with_intro_item(
+        items: List[Dict[str, str]], display_name: str
+    ) -> List[Dict[str, str]]:
+        """把"本插件介绍"条目插到该插件**第一个分组**的末尾。
+
+        注意不能简单追加到分区末尾：像 acmer 这类菜单最后一个分组是「仅管理员」，
+        追加到末尾会让一条人人可用的指令显示在管理员分组里。
+        """
+        entry = {
+            "command": f"插件介绍 {display_name}",
+            "description": "查看本插件的完整功能介绍",
+            "scope": "",
+        }
+        if not items:
+            entry["scope"] = "👥 所有人可用"
+            return [entry]
+        first_scope = str(items[0].get("scope") or "")
+        entry["scope"] = first_scope or "👥 所有人可用"
+        # 第一个分组的范围（后面全是其它分组，不能越界插进去）
+        group_end = len(items)
+        for index, item in enumerate(items):
+            if str(item.get("scope") or "") != first_scope:
+                group_end = index
+                break
+        # 优先紧跟该插件自己的「XX菜单」条目：菜单入口和"本插件介绍"放一起最好找；
+        # 没有菜单条目时，退到第一个分组的末尾（绝不落到管理员等其它分组里）。
+        insert_at = group_end
+        for index in range(group_end):
+            if "菜单" in str(items[index].get("command") or ""):
+                insert_at = index + 1
+        return list(items[:insert_at]) + [entry] + list(items[insert_at:])
 
     @staticmethod
     def _summary_text(plugins: List[Dict[str, object]]) -> str:
