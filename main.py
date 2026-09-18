@@ -768,9 +768,14 @@ class MenuNavPlugin(Star):
         for child in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
             if not child.is_dir() or child.name.startswith("."):
                 continue
-            if child.name == PLUGIN_NAME:
-                continue
-            if enabled is not None and child.name not in enabled:
+            # 这里**不再跳过自己**，且自己不受 WebUI 勾选影响：菜单导航自己的
+            # 「菜单 / 插件介绍」必须始终出现在聚合菜单里，否则「插件介绍」入口
+            # 会在用户只勾选部分插件时消失（WebUI 插件列表仍跳过自己）。
+            if (
+                enabled is not None
+                and child.name not in enabled
+                and child.name != PLUGIN_NAME
+            ):
                 continue
 
             metadata, metadata_raw = self._read_metadata(child)
