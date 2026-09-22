@@ -21,3 +21,6 @@
 ## 配置
 - WebUI「菜单导航」页 ─ 选择参与聚合的插件（全部 / 指定插件）
 - 保存后立即生效，并自动失效已有图片缓存
+## 支持平台
+- QQ 官方：qq_official / qq_official_webhook
+- QQ 非官方：aiocqhttp（OneBot v11）

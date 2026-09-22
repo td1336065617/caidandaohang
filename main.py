@@ -38,8 +38,26 @@ INTRO_COMMANDS = ("插件介绍", "功能介绍", "插件说明", "插件详情"
 INTRO_FORMAT_VERSION = 1
 # 单个插件的介绍最多渲染多少行（防止某个插件把卡片撑爆）
 INTRO_MAX_LINES = 60
-# 纯文本兜底时的单条消息最大长度
+# 纯文本兜底时的单条消息最大长度（默认值，实际按平台通道取值）
 MAX_CHUNK = 1500
+# 支持的 QQ 通道：官方族（WebSocket / Webhook）与非官方 OneBot（aiocqhttp）
+OFFICIAL_NAMES = {"qq_official", "qq_official_webhook"}
+ONEBOT_NAMES = {"aiocqhttp"}
+# 各通道纯文本分片上限
+TEXT_LIMITS = {"official": MAX_CHUNK, "onebot": 3000, "default": MAX_CHUNK}
+
+
+def resolve_channel(event: AstrMessageEvent) -> str:
+    """按平台适配器名解析通道：official / onebot / 其他空串。"""
+    try:
+        name = event.get_platform_name()
+    except Exception:
+        return ""
+    if name in OFFICIAL_NAMES:
+        return "official"
+    if name in ONEBOT_NAMES:
+        return "onebot"
+    return ""
 # 渲染失败后的冷却窗口：坏渲染环境下不要每次触发都重试几十秒。
 RENDER_FAILURE_COOLDOWN = 300
 # PNG 魔数，用于识别损坏/截断图片。
@@ -1824,14 +1842,15 @@ class MenuNavPlugin(Star):
         return None
 
     @staticmethod
-    def _text_chunks(text: str):
+    def _text_chunks(text: str, max_chunk: int = MAX_CHUNK):
         """纯文本兜底分片：尽量保持行/空格边界与首行缩进。
 
-        后续分片带“接上条”标记；单条总长不超过 MAX_CHUNK。
+        后续分片带“接上条”标记；单条总长不超过 max_chunk（按平台通道取值）。
         """
         value = str(text or "")
         marker = "……（接上条）\n"
-        hard_limit = max(1, MAX_CHUNK - len(marker))
+        limit = max(len(marker) + 1, int(max_chunk or MAX_CHUNK))
+        hard_limit = max(1, limit - len(marker))
         start = 0
         total = len(value)
         first = True
@@ -1857,7 +1876,11 @@ class MenuNavPlugin(Star):
             start = end
 
     # ------------------------------------------------------------------
-    @filter.platform_adapter_type(filter.PlatformAdapterType.QQOFFICIAL)
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+        | filter.PlatformAdapterType.AIOCQHTTP
+    )
     @filter.event_message_type(
         filter.EventMessageType.GROUP_MESSAGE
         | filter.EventMessageType.PRIVATE_MESSAGE
@@ -1883,5 +1906,8 @@ class MenuNavPlugin(Star):
         if image_path is not None and image_path.is_file():
             yield event.image_result(str(image_path))
             return
-        for piece in self._text_chunks(text):
+        channel = resolve_channel(event)
+        for piece in self._text_chunks(
+            text, TEXT_LIMITS.get(channel, TEXT_LIMITS["default"])
+        ):
             yield event.plain_result(piece)
