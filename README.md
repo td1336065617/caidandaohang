@@ -24,7 +24,7 @@
                  发送 1 张 PNG；全部渲染方式不可用 ──► 纯文本分片续发
 ```
 
-- **版本**：1.4.0 ｜ **支持平台**：`qq_official` / `qq_official_webhook`（QQ 官方）+ `aiocqhttp`（OneBot v11）｜ **许可**：见文末「许可」
+- **版本**：1.4.1 ｜ **支持平台**：`qq_official` / `qq_official_webhook`（QQ 官方）+ `aiocqhttp`（OneBot v11）｜ **许可**：见文末「许可」
 - **适配 AstrBot**：`>=4.13.0,<5`（`metadata.yaml` 的 `astrbot_version`）
 - **依赖**：`pyyaml`（必需，解析 `metadata.yaml`）+ `Pillow`（可选，仅在没有任何浏览器时用于兜底绘制）
 
@@ -346,3 +346,22 @@ menu_navigation/
 本项目采用 **MIT 许可**，详见 [LICENSE](LICENSE)。
 
 仓库内置的 Emoji 字体 `assets/fonts/NotoColorEmoji.ttf` 来自上游 Noto Emoji 项目，其 `fonts/*` 部分以 SIL Open Font License 1.1 授权（随附的许可文件同时列出了部分资源的 Apache-2.0 授权），完整说明见 [assets/fonts/LICENSE-NotoColorEmoji.txt](assets/fonts/LICENSE-NotoColorEmoji.txt)。
+
+---
+
+## Windows 支持
+
+Windows 上 Chromium / Firefox 通常不在 PATH，插件已内置常见安装路径探测
+（Chrome / Edge / Firefox 的 Program Files 与 %LOCALAPPDATA% 安装），
+并内置 Windows 系统字体（微软雅黑 / 黑体 / 宋体 / 等线）与 Emoji 字体（Segoe UI Emoji）。
+
+若仍拿不到图片，可显式指定（不改代码）：
+
+```bat
+set MENU_NAVIGATION_RENDERER=C:\Program Files\Google\Chrome\Application\chrome.exe
+set MENU_NAVIGATION_FONT=C:\Windows\Fonts\msyh.ttc
+set MENU_NAVIGATION_FONT_INDEX=0
+```
+
+> 只设置字体即可让 Pillow 兜底渲染出正确中文（不装浏览器也能出图）；
+> 设置浏览器路径则走 HTML 渲染，排版更接近设计稿。

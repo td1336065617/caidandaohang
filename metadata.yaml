@@ -7,7 +7,7 @@ desc: |
   内容会提取为菜单指令摘要并在触发时生成图片；无需修改各插件代码。
   可在 WebUI 中选择参与聚合的插件。
   支持 QQ 官方（qq_official / qq_official_webhook）与 OneBot v11（aiocqhttp）。
-version: 1.4.0
+version: 1.4.1
 author: td1336065617
 repo: https://github.com/td1336065617/caidandaohang/tree/master
 astrbot_version: ">=4.13.0,<5"

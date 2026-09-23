@@ -7,6 +7,19 @@
 
 ---
 
+## [1.4.1] - 2026-09-23
+
+> 🐛 Windows 兼容：自动探测系统浏览器与中文字体，不再依赖 Linux 工具链。
+
+### ✨ 新增
+- 浏览器候选新增 Windows 常见路径（Chrome / Edge / Firefox 的 Program Files 与 %LOCALAPPDATA% 安装）。
+- 中文字体候选新增 Windows 系统字体（msyh.ttc / msyhbd.ttc / simhei.ttf / simsun.ttc / Deng.ttf），Emoji 字体新增 seguiemj.ttf。
+
+### ⚙️ 变更
+- 上述候选在非 Windows 平台不存在，会被 shutil.which / Path.is_file 跳过，**Linux/macOS 行为不变**。
+
+---
+
 ## [1.4.0] - 2026-09-22
 
 > QQ 双通道适配：支持 OneBot v11（aiocqhttp）与官方 Webhook。
