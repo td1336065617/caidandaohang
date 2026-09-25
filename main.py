@@ -63,7 +63,7 @@ RENDER_FAILURE_COOLDOWN = 300
 # PNG 魔数，用于识别损坏/截断图片。
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 # 缓存格式变化时，强制重新生成 HTML 和图片
-CACHE_FORMAT_VERSION = 8
+CACHE_FORMAT_VERSION = 9
 # 图片尺寸：使用固定宽度，按内容估算高度，避免 QQ 文本长度限制
 RENDER_WIDTH = 1200
 MIN_RENDER_HEIGHT = 760
@@ -744,10 +744,21 @@ class MenuNavPlugin(Star):
 
     @staticmethod
     def _is_scope(line: str) -> bool:
-        return (
-            ("所有人" in line and ("用" in line or "可" in line))
-            or "管理员" in line
-        )
+        """判断是否为分组标题（如「👥 所有人可用」「🌙 仅管理员」）。
+
+        注意：**指令行**本身也可能带「管理员 / 所有人」等词
+        （例如 `• @某人 绑定cf ─ 管理员代绑定（仅后台管理员）`）。
+        带项目符号或分隔符的行一定是指令行，不能当标题，否则整条指令会在
+        解析时被 `continue` 吞掉，新功能就进不了菜单。
+        """
+        text = line.strip()
+        if not text:
+            return False
+        if _BULLET_RE.match(text) or _SEPARATOR_RE.search(text):
+            return False
+        if "管理员" in text:
+            return True
+        return "所有人" in text and ("用" in text or "可" in text)
 
     @staticmethod
     def _scope_label(line: str) -> str:
