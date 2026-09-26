@@ -775,6 +775,38 @@ class MenuNavPlugin(Star):
             line = " ".join(raw_line.split()).strip()
             if not line:
                 continue
+            # Markdown 表格行：| 指令 | 权限 | 说明 |（BUG-030：守卫插件就是这种写法）
+            if line.startswith("|") and line.count("|") >= 2:
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                if cells and all(set(cell) <= set("-: ") for cell in cells):
+                    continue                                  # |---|---| 分隔行
+                if not cells or not cells[0]:
+                    continue
+                if cells[0].strip('` ').lower() in {'指令', '命令', '功能', 'command'}:
+                    continue                                  # 表头行
+                command = cells[0].strip('` ')
+                rest = [cell for cell in cells[1:] if cell]
+                permission = ''
+                if rest and any(key in rest[0] for key in ('管理员', '所有人')):
+                    permission = rest.pop(0)
+                description = ' / '.join(rest)
+                if not command or len(command) > 120:
+                    continue
+                if '管理员' in permission:
+                    item_scope = '🌙 仅管理员'
+                elif permission:
+                    item_scope = '👥 所有人可用'
+                else:
+                    item_scope = scope or '👥 所有人可用'
+                items.append(
+                    {
+                        'scope': item_scope,
+                        'command': command,
+                        'description': description[:180]
+                        + ('…' if len(description) > 180 else ''),
+                    }
+                )
+                continue
             if cls._is_scope(line):
                 scope = cls._scope_label(line)
                 continue
