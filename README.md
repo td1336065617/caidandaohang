@@ -24,7 +24,7 @@
                  发送 1 张 PNG；全部渲染方式不可用 ──► 纯文本分片续发
 ```
 
-- **版本**：1.4.1 ｜ **支持平台**：`qq_official` / `qq_official_webhook`（QQ 官方）+ `aiocqhttp`（OneBot v11）｜ **许可**：见文末「许可」
+- **支持平台**：`qq_official` / `qq_official_webhook`（QQ 官方）+ `aiocqhttp`（OneBot v11）｜ **许可**：见文末「许可」；版本号与更新内容见 [CHANGELOG.md](CHANGELOG.md)
 - **适配 AstrBot**：`>=4.13.0,<5`（`metadata.yaml` 的 `astrbot_version`）
 - **依赖**：`pyyaml`（必需，解析 `metadata.yaml`）+ `Pillow`（可选，仅在没有任何浏览器时用于兜底绘制）
 
@@ -141,6 +141,7 @@ https://github.com/td1336065617/caidandaohang/tree/master
 与 `menu.md` 不同，**这里保留完整富文本**，用来讲"这个插件到底能做什么"：
 
 ```markdown
+
 ## 比赛查询
 - 最近比赛 ─ 汇总四平台未来 N 天内及进行中的比赛
 - nk比赛 ─ 牛客全部未开始比赛
@@ -333,10 +334,6 @@ menu_navigation/
 
 ---
 
-## 更新日志
-
-见 [CHANGELOG.md](CHANGELOG.md)。
-
 ## 免责声明
 
 本插件只读取各插件目录下的 `metadata.yaml` 与 `menu.md`，不会修改其它插件；聚合与渲染在收到 `菜单` 时按需进行，菜单内容完全来自各插件自己声明的文本，请以各插件的实际行为为准。图片渲染依赖服务器上可用的浏览器或 Pillow 与中文字体，环境不满足时会自动降级为纯文本，这种情况下请按「常见问题」自行排查。
@@ -365,3 +362,9 @@ set MENU_NAVIGATION_FONT_INDEX=0
 
 > 只设置字体即可让 Pillow 兜底渲染出正确中文（不装浏览器也能出图）；
 > 设置浏览器路径则走 HTML 渲染，排版更接近设计稿。
+
+## 相关文档
+
+- [更新日志](CHANGELOG.md)：每个版本的新增与修复
+- [配置参考](docs/CONFIG.md)：全部配置项与默认值
+
