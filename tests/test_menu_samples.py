@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import main as menu_main
 
-DATA = Path(__file__).resolve().parent / "data"
+DATA = Path(__file__).resolve().parent / "fixtures"
 
 
 def _items(name: str):
