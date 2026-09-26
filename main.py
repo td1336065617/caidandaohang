@@ -216,16 +216,6 @@ def _html_text(value: object) -> str:
     return "".join(pieces)
 
 
-def _tracked_width(draw, value: str, font, tracking: float) -> float:
-    units = _text_units(value)
-    width = sum(
-        draw.textbbox((0, 0), unit, font=font)[2]
-        - draw.textbbox((0, 0), unit, font=font)[0]
-        for unit in units
-    )
-    return width + max(0, len(units) - 1) * tracking
-
-
 def _draw_tracked(draw, xy, value: str, font, fill, tracking: float) -> None:
     cursor = float(xy[0])
     y = xy[1]
