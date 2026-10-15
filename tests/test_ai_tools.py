@@ -7,6 +7,8 @@ import json
 
 from conftest import FakeEvent, FakeReq
 
+import main as menu_main
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -209,7 +211,7 @@ def test_menu_ai_settings_accept_nested_payload(make_plugin, monkeypatch) -> Non
 def test_snapshot_signature_changes_when_intro_changes(make_plugin) -> None:
     """改了插件介绍（intro.md）必须让摘要指纹变化，否则注入的一直是旧摘要。"""
     plugin, root = make_plugin()
-    intro_path = root / "menu_navigation" / "intro.md"
+    intro_path = root / menu_main.SELF_DIR_NAME / "intro.md"
     before = plugin._collect_snapshot()[0]
     intro_path.write_text("新的介绍：换了个说法\n", encoding="utf-8")
     after = plugin._collect_snapshot()[0]
@@ -224,3 +226,38 @@ def test_throttle_key_isolates_members(make_plugin) -> None:
     second = FakeEvent(umo="aiocqhttp:GroupMessage:1000")
     second.get_sender_id = lambda: "user_b"
     assert plugin._throttle_key(first) != plugin._throttle_key(second)
+
+
+def test_self_row_kept_when_plugin_dir_differs_from_plugin_name(make_plugin, monkeypatch) -> None:
+    """生产实案：插件目录可能不叫 menu_navigation（如 caidandaohang）。
+
+    勾选了部分插件时，自己仍必须参与 AI 摘要（此前用 PLUGIN_NAME 比目录名，生产上恒不相等）。
+    """
+    monkeypatch.setattr(menu_main, "PLUGIN_NAME", "caidandaohang_renamed")
+    plugin, _root = make_plugin()
+    plugin._set_enabled_plugins({"other_plugin"})
+    rows = asyncio.run(plugin._collect_ai_rows())
+    directories = [row["directory"] for row in rows]
+    assert menu_main.SELF_DIR_NAME in directories, directories
+
+
+def test_menu_snapshot_keeps_self_when_plugin_dir_differs(make_plugin, monkeypatch) -> None:
+    """同一实案在人类菜单快照上：勾选部分插件时「菜单/插件介绍」入口不能消失。"""
+    monkeypatch.setattr(menu_main, "PLUGIN_NAME", "caidandaohang_renamed")
+    plugin, _root = make_plugin()
+    plugin._set_enabled_plugins({"other_plugin"})
+    _signature, text, rows = plugin._collect_snapshot()
+    assert "菜单导航" in text
+    assert any(
+        any("菜单导航" in str(item.get("command") or "") for item in row.get("items") or [])
+        for row in rows
+    ), rows
+
+
+def test_plugin_catalog_skips_self_when_plugin_dir_differs(make_plugin, monkeypatch) -> None:
+    """WebUI 的插件列表反过来：无论目录叫什么，都不该把自己列进去（避免自己勾自己）。"""
+    monkeypatch.setattr(menu_main, "PLUGIN_NAME", "caidandaohang_renamed")
+    plugin, _root = make_plugin()
+    catalog = plugin._plugin_catalog()
+    directories = [row["directory"] for row in catalog]
+    assert menu_main.SELF_DIR_NAME not in directories, directories

@@ -34,8 +34,27 @@ except ImportError:       # 测试里以顶层模块导入（python -m pytest，
     import ai_digest
 
 PLUGIN_NAME = "menu_navigation"
+
+#: 本插件**真实所在目录名**。生产上插件目录可能不叫 menu_navigation（例如叫 caidandaohang），
+#: 凡是要跟 plugin_store 下的目录名比对的判断都必须用它，不能用 PLUGIN_NAME（那是路由/数据目录名）。
+SELF_DIR_NAME = Path(__file__).resolve().parent.name
+#: 自身目录的 realpath：插件目录可能是软链（data/plugins/x -> 别处），此时
+#: Path(__file__).resolve() 解析出的名字会与 plugin_store 下的目录名不同，
+#: 所以判断是不是自己，要同时看 名字 与 realpath。
+_SELF_DIR = Path(__file__).resolve().parent
+
+
+def _is_self_dir(child: Path) -> bool:
+    # 判断 plugin_store 下的某个目录是不是本插件自己（兼容软链安装）
+    if child.name == SELF_DIR_NAME:
+        return True
+    try:
+        return child.resolve() == _SELF_DIR
+    except OSError:
+        return False
+
 #: 插件版本：与 metadata.yaml / CHANGELOG 顶部保持一致（tests/test_ai_compliance.py 会校验）
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 # 触发指令（全匹配，避免误伤聊天内容）
 MENU_COMMANDS = ("菜单", "菜单导航")
 # 插件介绍：介绍各插件的具体功能（含菜单无法表达的"主动触发"功能）。
@@ -352,7 +371,7 @@ class MenuNavPlugin(Star):
         for child in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
             if not child.is_dir() or child.name.startswith("."):
                 continue
-            if child.name == PLUGIN_NAME:
+            if _is_self_dir(child):
                 continue
             metadata, _ = self._read_metadata(child)
             menu_text, _ = self._read_menu(child, metadata)
@@ -903,7 +922,7 @@ class MenuNavPlugin(Star):
             if (
                 enabled is not None
                 and child.name not in enabled
-                and child.name != PLUGIN_NAME
+                and not _is_self_dir(child)
             ):
                 continue
 
@@ -2076,7 +2095,7 @@ class MenuNavPlugin(Star):
                 continue
             if child.name in disabled:
                 continue
-            if enabled is not None and child.name not in enabled and child.name != PLUGIN_NAME:
+            if enabled is not None and child.name not in enabled and not _is_self_dir(child):
                 continue                      # 自己始终参与（与菜单快照一致）
             metadata, _raw = self._read_metadata(child)
             menu_text, _menu_raw = self._read_menu(child, metadata)

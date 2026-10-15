@@ -69,7 +69,7 @@ def make_plugin(tmp_path):
         store_root.mkdir(parents=True, exist_ok=True)
         write_plugin(
             store_root,
-            "menu_navigation",
+            menu_main.SELF_DIR_NAME,
             menu="• 菜单 / 菜单导航 ─ 查看聚合菜单\n• 插件介绍 ─ 查看插件介绍",
             desc="菜单导航",
         )
