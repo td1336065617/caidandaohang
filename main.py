@@ -27,8 +27,15 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, json_response, request
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
+try:                      # AstrBot 以包方式加载（data.plugins.<目录>.main）
+    from . import ai_common, ai_digest
+except ImportError:       # 测试里以顶层模块导入（python -m pytest，CWD=仓库根）
+    import ai_common
+    import ai_digest
 
 PLUGIN_NAME = "menu_navigation"
+#: 插件版本：与 metadata.yaml / CHANGELOG 顶部保持一致（tests/test_ai_compliance.py 会校验）
+VERSION = "1.5.0"
 # 触发指令（全匹配，避免误伤聊天内容）
 MENU_COMMANDS = ("菜单", "菜单导航")
 # 插件介绍：介绍各插件的具体功能（含菜单无法表达的"主动触发"功能）。
@@ -69,6 +76,16 @@ RENDER_WIDTH = 1200
 MIN_RENDER_HEIGHT = 760
 MAX_RENDER_HEIGHT = 12000
 SETTINGS_KEY = "settings"
+#: AI 能力用独立 KV，避免与菜单勾选互相覆盖（设计 §4.4）
+AI_SETTINGS_KEY = "menu_ai_settings"
+AI_DEFAULTS: dict = {
+    "menu_ai_digest_enabled": True,
+    "menu_ai_digest_max_chars": 600,
+    "menu_ai_digest_scope": "group",          # group / all / off
+    "menu_ai_tools_enabled": True,
+    "menu_ai_tools_max_items": 40,
+    "menu_ai_tools_max_chars": 1200,
+}
 EMOJI_FONT_SIZE = 109
 BUNDLED_EMOJI_FONT = (
     Path(__file__).resolve().parent
@@ -245,6 +262,10 @@ class MenuNavPlugin(Star):
         self._intro_failed_at: Optional[float] = None
         # None 表示整合全部插件；集合表示仅整合指定目录。
         self._enabled_plugins: Optional[set[str]] = None
+        # AI 能力：配置缓存 + 摘要缓存锁 + 只读工具节流器
+        self._ai_cache: Optional[dict] = None
+        self._ai_digest_lock = threading.Lock()
+        self._ai_throttle = ai_common.ToolThrottle(limit=5, window=60)
         try:
             self.context.register_web_api(
                 f"/{PLUGIN_NAME}/config",
@@ -364,6 +385,7 @@ class MenuNavPlugin(Star):
                         "include_all": enabled is None,
                         "enabled_plugins": selected,
                     },
+                    "ai": await self._load_ai_settings(),
                     "plugins": catalog,
                 },
             }
@@ -400,6 +422,12 @@ class MenuNavPlugin(Star):
             directory = str(item).strip()
             if directory in known and directory not in normalized:
                 normalized.append(directory)
+        # 前端既可能发 {settings:{...}, ai:{...}}（平级），也可能把 ai 嵌进 settings：两种都要认
+        ai_patch = payload.get("ai")
+        if not isinstance(ai_patch, dict):
+            ai_patch = settings.get("ai")
+        if isinstance(ai_patch, dict):
+            await self._save_ai_settings(ai_patch)
         try:
             await self.put_kv_data(
                 SETTINGS_KEY,
@@ -887,11 +915,14 @@ class MenuNavPlugin(Star):
             fallback = self._short_description(metadata)
 
             # 即使插件暂时没有 menu.md，也把它纳入指纹；以后补充菜单时下一次触发即可更新。
+            # intro.md 原文也要进指纹：否则改了插件介绍，注入摘要还是旧的（子代理审计 P2-3）
+            _intro_text, intro_raw = self._read_intro(child, metadata)
             source.append(
                 {
                     "directory": child.name,
                     "metadata": metadata_raw,
                     "menu": menu_raw,
+                    "intro": intro_raw,
                 }
             )
             if not items and not fallback and not repo:
@@ -1962,6 +1993,264 @@ class MenuNavPlugin(Star):
             start = end
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # AI 能力（注入 + 只读工具 + 独立配置）
+    #   · 位置约束：工具与钩子必须在入口模块的插件类里（框架按入口模块绑定）；
+    #   · 独立可用：只读本机插件目录与 metadata，不依赖其它插件。
+    # ------------------------------------------------------------------
+    def _normalize_ai_settings(self, raw) -> dict:
+        """默认值 + 类型/边界归一（读写共用，任何来源都合法）。"""
+        merged = dict(AI_DEFAULTS)
+        if isinstance(raw, dict):
+            merged.update({key: value for key, value in raw.items() if key in AI_DEFAULTS})
+        merged["menu_ai_digest_enabled"] = ai_common.to_bool(merged["menu_ai_digest_enabled"])
+        merged["menu_ai_tools_enabled"] = ai_common.to_bool(merged["menu_ai_tools_enabled"])
+        merged["menu_ai_digest_max_chars"] = ai_common.clamp_int(
+            merged["menu_ai_digest_max_chars"], 30, 2000, default=AI_DEFAULTS["menu_ai_digest_max_chars"]
+        )
+        merged["menu_ai_tools_max_items"] = ai_common.clamp_int(
+            merged["menu_ai_tools_max_items"], 5, 200, default=AI_DEFAULTS["menu_ai_tools_max_items"]
+        )
+        merged["menu_ai_tools_max_chars"] = ai_common.clamp_int(
+            merged["menu_ai_tools_max_chars"], 200, 4000, default=AI_DEFAULTS["menu_ai_tools_max_chars"]
+        )
+        merged["menu_ai_digest_scope"] = ai_common.pick_enum(
+            merged["menu_ai_digest_scope"], ("group", "all", "off"), "group"
+        )
+        return merged
+
+    async def _load_ai_settings(self) -> dict:
+        try:
+            raw = await self.get_kv_data(AI_SETTINGS_KEY, {}) or {}
+        except Exception as exc:
+            logger.warning("读取 AI 配置失败，使用默认值：%s", exc)
+            raw = {}
+        self._ai_cache = self._normalize_ai_settings(raw)
+        return self._ai_cache
+
+    async def _save_ai_settings(self, patch) -> dict:
+        try:
+            raw = await self.get_kv_data(AI_SETTINGS_KEY, {}) or {}
+        except Exception:
+            raw = {}
+        current = dict(raw) if isinstance(raw, dict) else {}
+        current.update({key: value for key, value in (patch or {}).items() if key in AI_DEFAULTS})
+        merged = self._normalize_ai_settings(current)
+        await self.put_kv_data(AI_SETTINGS_KEY, merged)
+        self._ai_cache = merged
+        return merged
+
+    async def _disabled_plugins(self) -> set:
+        """框架侧已停用插件的目录名集合（元素形如 data.plugins.<目录>.<入口模块>）。"""
+        try:
+            from astrbot.api import sp
+            raw = await sp.global_get("inactivated_plugins", [])
+        except Exception as exc:
+            logger.warning("读取停用插件列表失败，按未停用处理：%s", exc)
+            return set()
+        names: set = set()
+        for item in raw if isinstance(raw, list) else []:
+            parts = str(item).strip().split(".")
+            if len(parts) >= 3 and parts[0] == "data" and parts[1] == "plugins":
+                names.add(parts[2])
+        return names
+
+    def _menu_signature(self) -> str:
+        """复用仓库既有的菜单快照签名（main.py 的 _collect_snapshot）。"""
+        try:
+            return str(self._collect_snapshot()[0])
+        except Exception as exc:
+            logger.warning("计算菜单签名失败：%s", exc)
+            return ""
+
+    async def _collect_ai_rows(self) -> list:
+        """扫描插件目录 → 只取静态文件解析结果（禁止拼接运行时成员数据）。"""
+        root = self._plugin_store_path()
+        if not root.is_dir():
+            return []
+        disabled = await self._disabled_plugins()
+        enabled = getattr(self, "_enabled_plugins", None)
+        rows: list = []
+        for child in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if child.name in disabled:
+                continue
+            if enabled is not None and child.name not in enabled and child.name != PLUGIN_NAME:
+                continue                      # 自己始终参与（与菜单快照一致）
+            metadata, _raw = self._read_metadata(child)
+            menu_text, _menu_raw = self._read_menu(child, metadata)
+            items = self._extract_menu_items(menu_text) if menu_text else []
+            intro_text, _intro_raw = self._read_intro(child, metadata)
+            rows.append({
+                "directory": child.name,
+                "display": self._display_name(child, metadata),
+                "summary": self._short_description(metadata),
+                "items": items,
+                "intro": intro_text or "",
+            })
+        return rows
+
+    async def _build_ai_digest(self) -> str:
+        """组装并缓存能力速览（签名含菜单快照 + 停用集合 + 全部 AI 配置）。"""
+        cfg = await self._load_ai_settings()
+        rows = await self._collect_ai_rows()
+        signature = ai_digest.digest_signature(
+            self._menu_signature(), await self._disabled_plugins(), cfg
+        )
+        cached = ai_digest.cache_read(self._cache_dir(), signature)
+        if cached is not None:
+            return cached
+        text = ai_digest.build_digest(
+            rows,
+            limit=int(cfg.get("menu_ai_digest_max_chars") or 600),
+        )
+        if text:
+            ai_digest.cache_write(self._cache_dir(), signature, text)
+        return text
+
+    @staticmethod
+    def _is_group_event(event: AstrMessageEvent) -> bool:
+        """群会话判断：优先用框架 MessageType，兜底看统一消息来源。"""
+        try:
+            from astrbot.core.platform.message_type import MessageType
+            return event.get_message_type() == MessageType.GROUP_MESSAGE
+        except Exception:
+            return "GroupMessage" in str(getattr(event, "unified_msg_origin", "") or "")
+
+    @staticmethod
+    def _throttle_key(event: AstrMessageEvent) -> str:
+        # 设计 §3.4：节流维度是每个调用者（会话 + 成员），不是整群
+        session = str(getattr(event, "unified_msg_origin", "") or "")
+        sender = str(getattr(event, "get_sender_id", lambda: "")() or "")
+        return "%s:%s" % (session or "unknown", sender or "-")
+
+    @filter.on_llm_request(priority=5000)
+    async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
+        """把能力速览注入 system_prompt（仅群聊 + 开关打开 + 同一请求只注入一次）。"""
+        try:
+            if getattr(req, "_menu_ai_digest_injected", False):
+                return
+            cfg = await self._load_ai_settings()
+            if not cfg.get("menu_ai_digest_enabled"):
+                return
+            scope = str(cfg.get("menu_ai_digest_scope") or "group")
+            if scope == "off":
+                return
+            if scope == "group" and not self._is_group_event(event):
+                return
+            digest = await self._build_ai_digest()
+            if not digest:
+                return
+            req.system_prompt = (getattr(req, "system_prompt", "") or "") + chr(10) + chr(10) + digest
+            req._menu_ai_digest_injected = True
+            logger.info("已注入能力速览（%d 字，scope=%s）", len(digest), scope)
+        except Exception as exc:
+            logger.warning("注入能力速览失败（不影响正常对话）：%s", exc)
+
+    @filter.llm_tool(name="plugins_menu")
+    async def plugins_menu(self, event: AstrMessageEvent, **kwargs) -> str:
+        """查看本群机器人当前可用的菜单（已启用插件的指令汇总）。
+
+        何时使用：用户问这机器人能干啥 / 有什么功能 / 怎么用 / 菜单。
+        何时别用：用户问具体数据（比赛成绩、群人数）时不要调用，直接照常回答。
+
+        Args:
+            detail(string): 可选，summary（默认，只列指令名）或 full（含每条指令说明）。
+        """
+        return await self._ai_tool_menu(event, kwargs)
+
+    @filter.llm_tool(name="plugins_intro")
+    async def plugins_intro(self, event: AstrMessageEvent, **kwargs) -> str:
+        """查看插件功能介绍（用户问某个插件是干什么的时用）。
+
+        何时使用：用户想了解某个插件能提供什么，或直接问插件介绍。
+        何时别用：只是要指令列表时用 plugins_menu。
+
+        Args:
+            plugin(string): 可选，插件显示名或目录名（如 acmer、菜单导航）；留空返回全部简介。
+        """
+        return await self._ai_tool_intro(event, kwargs)
+
+    async def _ai_tool_menu(self, event: AstrMessageEvent, kwargs: dict) -> str:
+        cfg = await self._load_ai_settings()
+        if not cfg.get("menu_ai_tools_enabled"):
+            return ai_common.fail("disabled", "菜单导航的 AI 工具已在配置里关闭", hint="管理员可在插件页打开")
+        wait = self._ai_throttle.check("plugins_menu", self._throttle_key(event))
+        if wait:
+            return ai_common.fail("throttled", "调用太频繁，请 %d 秒后再试" % wait, retry_after=wait)
+        raw_detail = (kwargs or {}).get("detail")
+        detail = ai_common.pick_enum(raw_detail, ("summary", "full"), None)
+        if detail is None:
+            if str(raw_detail or "").strip():
+                return ai_common.fail(
+                    "invalid_argument", "detail 只能是 summary 或 full", field="detail"
+                )
+            detail = "summary"                     # 未提供 → 用默认值
+        rows = await self._collect_ai_rows()
+        if not rows:
+            return ai_common.ok({"count": 0, "text": "（当前没有可用的插件菜单）"})
+        limit_items = int(cfg.get("menu_ai_tools_max_items") or 40) if detail == "summary" else 200
+        blocks: list = []
+        for row in rows:
+            display = str(row.get("display") or "未命名插件")
+            if detail == "summary":
+                commands = ai_digest.pick_commands(row.get("items") or [], limit_items)
+                if commands:
+                    blocks.append("【%s】%s" % (display, " / ".join(commands)))
+                else:
+                    blocks.append("【%s】%s" % (display, ai_digest.neutralize(row.get("summary"))))
+            else:
+                body = ai_digest.render_menu_text(row.get("items") or [], prefix="· ", suffix=" — ")
+                intro = ai_digest.drop_noise(ai_digest.neutralize(row.get("intro")))
+                content = body or intro or ai_digest.neutralize(row.get("summary")) or "（未提供）"
+                blocks.append("【%s】%s%s" % (display, chr(10), content))
+        text = ai_common.sanitize(
+            ai_digest.hide_member_data(chr(10).join(blocks)),
+            int(cfg.get("menu_ai_tools_max_chars") or 1200),
+        )
+        logger.info("AI 工具 plugins_menu 命中（detail=%s，插件数=%d，%d 字）", detail, len(rows), len(text))
+        return ai_common.ok({"count": len(rows), "detail": detail, "text": text})
+
+    async def _ai_tool_intro(self, event: AstrMessageEvent, kwargs: dict) -> str:
+        cfg = await self._load_ai_settings()
+        if not cfg.get("menu_ai_tools_enabled"):
+            return ai_common.fail("disabled", "菜单导航的 AI 工具已在配置里关闭")
+        wait = self._ai_throttle.check("plugins_intro", self._throttle_key(event))
+        if wait:
+            return ai_common.fail("throttled", "调用太频繁，请 %d 秒后再试" % wait, retry_after=wait)
+        want = ai_common.sanitize((kwargs or {}).get("plugin"), 60)
+        rows = await self._collect_ai_rows()
+        if not rows:
+            return ai_common.ok({"count": 0, "text": "（当前没有可用的插件介绍）"})
+        matched = rows
+        if want:
+            key = want.casefold()
+            matched = [
+                row for row in rows
+                if key in str(row.get("display") or "").casefold()
+                or key in str(row.get("directory") or "").casefold()
+            ]
+            if not matched:
+                return ai_common.fail(
+                    "not_found",
+                    "没有找到叫「%s」的插件" % want,
+                    candidates=[row.get("display") for row in rows][:10],
+                )
+        blocks: list = []
+        for row in matched:
+            display = str(row.get("display") or "未命名插件")
+            body = ai_digest.drop_noise(ai_digest.neutralize(row.get("intro")))
+            if not body:
+                commands = ai_digest.pick_commands(row.get("items") or [], 12)
+                body = " / ".join(commands) or ai_digest.neutralize(row.get("summary")) or "（该插件未提供介绍）"
+            blocks.append("【%s】%s%s" % (display, chr(10), body))
+        text = ai_common.sanitize(
+            ai_digest.hide_member_data(chr(10).join(blocks)),
+            int(cfg.get("menu_ai_tools_max_chars") or 1200),
+        )
+        logger.info("AI 工具 plugins_intro 命中（匹配 %d 个插件）", len(matched))
+        return ai_common.ok({"count": len(matched), "text": text})
     @filter.platform_adapter_type(
         filter.PlatformAdapterType.QQOFFICIAL
         | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK

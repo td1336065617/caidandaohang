@@ -51,6 +51,34 @@
   </div>
 </div>
 
+<div class="card">
+  <h2>AI 能力</h2>
+  <div class="row" style="margin-bottom:8px">
+    <label><input type="checkbox" id="aiDigestEnabled"> 开启「能力速览」注入（只注入菜单里真实存在的指令）</label>
+  </div>
+  <div class="row" style="margin-bottom:8px">
+    <label>注入范围
+      <select id="aiDigestScope">
+        <option value="group">仅群聊</option>
+        <option value="all">全部会话</option>
+        <option value="off">关闭注入</option>
+      </select>
+    </label>
+    <label>速览上限 <input type="number" id="aiDigestMaxChars" min="30" max="2000" style="width:90px"> 字</label>
+  </div>
+  <div class="row" style="margin-bottom:8px">
+    <label><input type="checkbox" id="aiToolsEnabled"> 开启 AI 只读工具（看菜单 / 看插件介绍）</label>
+  </div>
+  <div class="row">
+    <label>单插件指令上限 <input type="number" id="aiToolsMaxItems" min="5" max="200" style="width:90px"> 条</label>
+    <label>工具返回上限 <input type="number" id="aiToolsMaxChars" min="200" max="4000" style="width:100px"> 字</label>
+  </div>
+  <div class="muted" style="margin-top:10px">
+    这些开关立即生效：关掉注入后 AI 不再收到速览；关掉工具后 AI 无法调用 plugins_menu / plugins_intro。
+    速览只读取插件的 menu.md / intro.md 等静态文件，不含群成员等运行时数据。
+  </div>
+</div>
+
 <script>
 (function () {
   const A = window.AstrBotPluginPage;
@@ -59,6 +87,7 @@
   const includeAllInput = document.getElementById('includeAllInput');
   let plugins = [];
   let settings = { include_all: true, enabled_plugins: [] };
+  let ai = {};
 
   function show(text, isError) {
     result.style.display = 'block';
@@ -123,6 +152,13 @@
       plugins = (response && Array.isArray(response.plugins) ? response.plugins : [])
         .map(plugin => Object.assign({}, plugin));
       includeAllInput.checked = settings.include_all;
+      ai = (response && response.ai) || ai;
+      document.getElementById('aiDigestEnabled').checked = ai.menu_ai_digest_enabled !== false;
+      document.getElementById('aiDigestScope').value = ai.menu_ai_digest_scope || 'group';
+      document.getElementById('aiDigestMaxChars').value = ai.menu_ai_digest_max_chars || 600;
+      document.getElementById('aiToolsEnabled').checked = ai.menu_ai_tools_enabled !== false;
+      document.getElementById('aiToolsMaxItems').value = ai.menu_ai_tools_max_items || 40;
+      document.getElementById('aiToolsMaxChars').value = ai.menu_ai_tools_max_chars || 1200;
       renderPlugins();
     } catch (e) {
       show('加载配置失败：' + (e && e.message ? e.message : e), true);
@@ -134,12 +170,20 @@
     document.querySelectorAll('.plugin-check').forEach((checkbox) => {
       if (checkbox.checked) enabled.push(checkbox.dataset.directory);
     });
+    const nextAi = {
+      menu_ai_digest_enabled: document.getElementById('aiDigestEnabled').checked,
+      menu_ai_digest_scope: document.getElementById('aiDigestScope').value,
+      menu_ai_digest_max_chars: Number(document.getElementById('aiDigestMaxChars').value || 600),
+      menu_ai_tools_enabled: document.getElementById('aiToolsEnabled').checked,
+      menu_ai_tools_max_items: Number(document.getElementById('aiToolsMaxItems').value || 40),
+      menu_ai_tools_max_chars: Number(document.getElementById('aiToolsMaxChars').value || 1200)
+    };
     const nextSettings = {
       include_all: includeAllInput.checked,
       enabled_plugins: enabled
     };
     try {
-      const response = await A.apiPost('config', { settings: nextSettings });
+      const response = await A.apiPost('config', { settings: nextSettings, ai: nextAi });
       settings = (response && response.settings) || nextSettings;
       settings.include_all = !!settings.include_all;
       settings.enabled_plugins = Array.isArray(settings.enabled_plugins)
